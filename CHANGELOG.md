@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.3
+
+- **Furniture is cleared out of the way of doorways** (`knoxbuild/layout.py`).
+  Rooms were furnished one at a time, so a shelf could land in the only
+  doorway and a counter could span the only way through. The plan was always
+  connected; the furnished building was not. Over 400 buildings, 272 had at
+  least one room nobody could walk into and 3,030 rooms of 34,331 were sealed
+  off. Now none, for 0.42% of the furniture.
+
 ## 1.4.2
 
 - **Paper map outlines are checked again after they are rounded to whole

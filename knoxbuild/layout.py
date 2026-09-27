@@ -15,6 +15,7 @@ room indices, so we only ever paint rooms - we never emit wall objects.
 from __future__ import annotations
 
 import random
+from collections import deque
 from dataclasses import dataclass, field
 
 from . import catalog as C
@@ -2282,6 +2283,7 @@ class Building:
 
 
 STAIR_RUN = 5      # tiles a staircase occupies, from Stairs::bounds
+MANY = 1 << 30     # further than any search goes
 CORE_WIDE = 3      # the shaft is the flight plus a landing beside it
 
 
@@ -2493,6 +2495,131 @@ def _clear_for_stairs(plan: Plan, x: int, y: int, d: str) -> None:
     ]
 
 
+def _blocks(role: str) -> bool:
+    """Whether a piece stands on the floor and stops you walking through."""
+    return C.FURNITURE_LAYERS.get(role, "Furniture") == "Furniture"
+
+
+def _tiles_under(role: str, x: int, y: int, orient: str):
+    """Every tile a piece covers, from the offsets in its catalog entry: a
+    double bed is four of them and a sofa two, not one each."""
+    spots = C.FURNITURE.get(role, {}).get(orient) or {"0,0": None}
+    for key in spots:
+        dx, _, dy = key.partition(",")
+        yield x + int(dx), y + int(dy)
+
+
+def _ways_in(building: "Building", level: int, storey: "Plan") -> set:
+    """The tiles a player arrives on: the outside doors on the ground floor,
+    the stairs on every floor above."""
+    w, h = storey.width, storey.height
+
+    def room(x, y):
+        return storey.grid[y][x] if 0 <= x < w and 0 <= y < h else 0
+
+    out = set()
+    if level == 0:
+        for (x, y, d) in storey.doors:
+            a = (x - 1, y) if d == "W" else (x, y - 1)
+            if room(*a) and not room(x, y):
+                out.add(a)
+            elif room(x, y) and not room(*a):
+                out.add((x, y))
+    for lvl, (sx, sy, sd) in enumerate(building.stairs):
+        if lvl not in (level - 1, level):
+            continue
+        dx, dy = (0, 1) if sd == "N" else (1, 0)
+        out |= {(sx + dx * i, sy + dy * i) for i in range(STAIR_RUN)
+                if room(sx + dx * i, sy + dy * i)}
+    return out
+
+
+def _open_up(storey: "Plan", starts: set) -> set:
+    """Which pieces have to go for every room to be walked into."""
+    w, h, grid = storey.width, storey.height, storey.grid
+    doors = set(storey.doors)
+    at: dict = {}
+    for i, (role, fx, fy, orient) in enumerate(storey.furniture):
+        if not _blocks(role):
+            continue
+        for tile in _tiles_under(role, fx, fy, orient):
+            at.setdefault(tile, set()).add(i)
+
+    def step(ax, ay, bx, by) -> bool:
+        """Whether you can walk from one tile to the next: same room, or a
+        doorway in the wall between them."""
+        if not (0 <= bx < w and 0 <= by < h) or not grid[by][bx]:
+            return False
+        if grid[ay][ax] == grid[by][bx]:
+            return True
+        if bx == ax + 1:
+            return (bx, by, "W") in doors
+        if ax == bx + 1:
+            return (ax, ay, "W") in doors
+        if by == ay + 1:
+            return (bx, by, "N") in doors
+        return (ax, ay, "N") in doors
+
+    # A 0-1 search out from the way in: stepping onto an empty tile is free,
+    # stepping onto an occupied one costs the piece standing there. What comes
+    # back is the fewest pieces that have to move for each room to open.
+    best: dict = {}
+    back: dict = {}
+    queue = deque()
+    for tile in starts:
+        cost = 1 if tile in at else 0
+        if cost < best.get(tile, MANY):
+            best[tile], back[tile] = cost, None
+            queue.appendleft(tile) if cost == 0 else queue.append(tile)
+    while queue:
+        x, y = queue.popleft()
+        here = best[(x, y)]
+        for nxt in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if not step(x, y, *nxt):
+                continue
+            cost = here + (1 if nxt in at else 0)
+            if cost < best.get(nxt, MANY):
+                best[nxt], back[nxt] = cost, (x, y)
+                queue.appendleft(nxt) if cost == here else queue.append(nxt)
+
+    walked = {grid[y][x] for (x, y), cost in best.items() if cost == 0}
+    want: dict = {}
+    for (x, y), cost in best.items():
+        idx = grid[y][x]
+        if not idx or idx in walked or storey.rooms[idx - 1].is_shaft:
+            continue
+        if cost < want.get(idx, (MANY, None))[0]:
+            want[idx] = (cost, (x, y))
+    gone: set = set()
+    for _cost, tile in want.values():
+        while tile is not None:
+            gone |= at.get(tile, set())
+            tile = back.get(tile)
+    return gone
+
+
+def _clear_the_way(building: "Building") -> int:
+    """Take out whatever stands between a doorway and the rooms behind it.
+
+    Rooms are furnished one at a time, so nothing stopped a shelf landing in
+    the only doorway or a counter spanning the only way through. The plan was
+    connected - every audit of it passed - but the furnished building was not.
+    """
+    removed = 0
+    for level, storey in enumerate(building.storeys):
+        starts = _ways_in(building, level, storey)
+        if not starts:
+            continue
+        for _round in range(6):
+            gone = _open_up(storey, starts)
+            if not gone:
+                break
+            storey.furniture = [f for i, f in enumerate(storey.furniture)
+                                if i not in gone]
+            removed += len(gone)
+    return removed
+
+
 def build_building(width: int, height: int, levels: int = 1,
                    commercial: bool = False, seed: int = 0,
                    kind: str | None = None,
@@ -2563,6 +2690,9 @@ def build_building(width: int, height: int, levels: int = 1,
     # Windows last and for the whole building at once, so they stack in
     # columns instead of each floor scattering its own.
     _place_windows(building, kind, shop_ground=shops)
+    # Last of all, because it is the furnished building that has to be
+    # walkable, not the plan.
+    _clear_the_way(building)
     return building
 
 
