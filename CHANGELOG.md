@@ -1,6 +1,22 @@
 # Changelog
 
-## 1.4.3
+## 1.4.2
+
+- **The map compiler uses its own Qt plugins on Linux, not the machine's**
+  (`knoxpaths.py`, `worlded-linux.yml`). Loading the right Qt libraries was
+  only half of it: Qt looks for its plugins under the prefix it was compiled
+  with, so on Ubuntu 24.04 the bundled Qt 5.15.3 read
+  `/usr/lib/x86_64-linux-gnu/qt5/plugins`, whose `libqsvg.so` pulled the
+  system's Qt 5.15.13 in behind it and Qt aborted. `QT_PLUGIN_PATH` cannot
+  settle that, because a plugin found through the built-in prefix is loaded
+  before the environment is consulted. A `qt.conf` beside the compiler
+  replaces the prefix itself, which is the first thing Qt reads. Written on
+  setup, so an install that already exists is fixed without a reinstall.
+  Reported with the diagnosis by a player on Ubuntu 24.04.5.
+
+- **glib and harfbuzz are left to the machine.** Every desktop has them, and
+  the bundled copies were older than the system GTK they ended up beside,
+  which failed on `g_dir_unref` and `hb_ot_color_has_paint`.
 
 - **Corridors and stair halls are dressed, not blank** (`knoxbuild/layout.py`).
   Nothing may stand in a corridor — a flat's front door and the only way past
@@ -65,8 +81,6 @@
   with a kitchen, a bathroom and a living room each. One storey is still a
   house at any size, three or more is still flats, and `building=house` is
   still believed.
-
-## 1.4.2
 
 - **Paper map outlines are checked again after they are rounded to whole
   tiles** (`knoxbuild/worldmap_bin.py`). Collapsed and self-crossing polygons

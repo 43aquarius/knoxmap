@@ -1366,7 +1366,7 @@ MIN_WALL_FOR_WINDOW = 3
 # are the one thing you can walk over.
 CORE_WALL_ART = ("painting", "mirror", "painting", "corkboard")
 CORE_FACADE_SHARE = 4
-CORE_RUGS = ("rug", "rug_wide", "rug_small")
+CORE_RUGS = ("rug_wide", "rug", "rug_small")
 CORE_RUG_EVERY = 3
 
 
@@ -2125,12 +2125,25 @@ def _furnish(plan: Plan, rng: random.Random,
             for slot in inside + facade[:max(1, len(facade) // CORE_FACADE_SHARE)]:
                 if hang(CORE_WALL_ART[hung % len(CORE_WALL_ART)], *slot):
                     hung += 1
+            laid = 0
             for n, (x, y) in enumerate(
                     (x, y) for y in range(r.y0, r.y1 + 1)
                     for x in range(r.x0, r.x1 + 1)
                     if plan.grid[y][x] == idx and (x, y) not in keep_clear):
-                if n % CORE_RUG_EVERY == 0:
-                    plan.furniture.append((rng.choice(CORE_RUGS), x, y, "N"))
+                if n % CORE_RUG_EVERY:
+                    continue
+                # A rug is two or three tiles wide, so every tile of it has to
+                # be this room's floor and clear; one hanging over the edge is
+                # a rug through the wall.
+                order = CORE_RUGS[laid % len(CORE_RUGS):] + CORE_RUGS[:laid % len(CORE_RUGS)]
+                for role in order:
+                    cells = _cells_for(role, x, y, "N")
+                    if any(_room_at(plan, cx, cy) != idx or (cx, cy) in keep_clear
+                           for cx, cy in cells):
+                        continue
+                    plan.furniture.append((role, x, y, "N"))
+                    laid += 1
+                    break
             continue
         # A shop's sales floor is fitted out as a whole - rows of shelving,
         # the till by the door - not from a list pushed against its walls.

@@ -184,11 +184,47 @@ def _carries_qt(folder: str) -> bool:
         return False
 
 
+# Qt reads this beside the program before it looks anywhere else, and
+# Plugins= is relative to the program's own folder.
+QT_CONF = "[Paths]\nPlugins=plugins\n"
+
+
+def write_qt_conf(program: Path | str) -> bool:
+    """Point Qt at the bundled plugin tree, not the machine's.
+
+    Loading the right Qt libraries is only half of it. Qt looks for its
+    plugins under the prefix it was *compiled* with, which on the machine
+    that built this is a system path - so on Ubuntu 24.04 the compiler
+    loaded its own Qt 5.15.3 and then read
+    /usr/lib/x86_64-linux-gnu/qt5/plugins, whose libqsvg.so pulled in the
+    system's libQt5Svg 5.15.13 behind it. Qt saw two versions and aborted:
+
+        Cannot mix incompatible Qt library (5.15.13) with this library
+        (5.15.3)
+
+    QT_PLUGIN_PATH does not settle it, because a plugin found through the
+    built-in prefix is loaded before anything the environment says. qt.conf
+    replaces the prefix itself, which is the one thing Qt reads first.
+    """
+    beside = Path(program).parent
+    if not _is_dir(beside / "plugins"):
+        return False
+    conf = beside / "qt.conf"
+    try:
+        if conf.exists() and conf.read_text(encoding="utf-8") == QT_CONF:
+            return False
+        conf.write_text(QT_CONF, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def force_bundled_qt(program: Path | str | None = None) -> int:
-    """Make the compiler and everything it ships with outrank LD_LIBRARY_PATH.
+    """Make the compiler use the Qt it ships with, libraries and plugins both.
 
     Returns how many files were changed. Safe to call repeatedly: a file that
-    already records DT_RPATH is left as it is.
+    already records DT_RPATH, and a qt.conf that already says the right
+    thing, are left as they are.
     """
     if os.name == "nt":
         return 0
@@ -203,7 +239,7 @@ def force_bundled_qt(program: Path | str | None = None) -> int:
         if _is_dir(folder):
             files += [p for p in folder.rglob("*") if p.is_file()
                       and not p.is_symlink()]
-    return sum(1 for f in files if _force_rpath(f))
+    return sum(1 for f in files if _force_rpath(f)) + write_qt_conf(program)
 
 
 def tool_env(program: Path | str | None = None) -> dict[str, str]:

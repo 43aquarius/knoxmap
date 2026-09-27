@@ -889,6 +889,25 @@ def check_rpath(check) -> None:
         before = path.read_bytes()
         check(not knoxpaths._force_rpath(path) and path.read_bytes() == before,
               f"and {name} is not touched")
+
+    # Loading the right Qt is only half of it: Qt looks for its plugins under
+    # the prefix it was compiled with, and on Ubuntu 24.04 that meant the
+    # bundled Qt 5.15.3 reading the system's plugin tree and pulling 5.15.13
+    # in behind it. qt.conf replaces the prefix.
+    bin_dir = work / "bin"
+    (bin_dir / "plugins" / "platforms").mkdir(parents=True)
+    binary = bin_dir / "PZWorldEd_cli"
+    binary.write_bytes(elf(29))
+    check(knoxpaths.write_qt_conf(binary)
+          and "Plugins=plugins" in (bin_dir / "qt.conf").read_text(encoding="utf-8"),
+          "a qt.conf beside the compiler points Qt at the bundled plugins")
+    check(not knoxpaths.write_qt_conf(binary),
+          "and one that already says so is left alone")
+    bare = work / "bare"
+    bare.mkdir()
+    check(not knoxpaths.write_qt_conf(bare / "PZWorldEd_cli")
+          and not (bare / "qt.conf").exists(),
+          "with no bundled plugins to point at, none is written")
     shutil.rmtree(work, ignore_errors=True)
 
 

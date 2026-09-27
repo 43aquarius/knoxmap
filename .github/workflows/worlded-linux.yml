@@ -103,7 +103,11 @@ jobs:
           # the machine's own graphics stack - Qt above all, so it runs on a
           # PC with no Qt installed. Three rounds, because a library copied in
           # brings its own.
-          system='/(ld-linux[^/]*|libc|libm|libdl|libpthread|librt|libstdc\+\+|libgcc_s|libGL|libGLX|libGLdispatch|libEGL|libOpenGL|libX11|libxcb|libdrm|libgbm|libwayland-[a-z]+)[.-]'
+          # glib and harfbuzz are left to the machine too: every desktop has
+          # them, and a bundled copy older than the system GTK it ends up
+          # beside fails on symbols GTK expects (g_dir_unref,
+          # hb_ot_color_has_paint on Ubuntu 24.04).
+          system='/(ld-linux[^/]*|libc|libm|libdl|libpthread|librt|libstdc\+\+|libgcc_s|libGL|libGLX|libGLdispatch|libEGL|libOpenGL|libX11|libxcb|libdrm|libgbm|libwayland-[a-z]+|libglib-2\.0|libgobject-2\.0|libgio-2\.0|libgmodule-2\.0|libharfbuzz)[.-]'
           for round in 1 2 3; do
             for f in "$out/PZWorldEd_cli" "$out"/lib/*.so* "$out"/plugins/platforms/*.so; do
               [ -e "$f" ] || continue
@@ -128,6 +132,12 @@ jobs:
           for plugin in "$out"/plugins/platforms/*.so; do
             patchelf --force-rpath --set-rpath '$ORIGIN/../../lib' "$plugin"
           done
+          # Qt looks for plugins under the prefix it was compiled with, which
+          # is a system path on the machine that built it. qt.conf replaces
+          # that prefix, and it is the first thing Qt reads: without it the
+          # bundled Qt loads the system's imageformats plugins, and those
+          # drag the system's Qt in behind them.
+          printf '[Paths]\nPlugins=plugins\n' > "$out/qt.conf"
           du -sh "$out"
 
       - name: Nothing it needs is missing
