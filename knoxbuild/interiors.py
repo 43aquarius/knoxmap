@@ -383,6 +383,9 @@ CHOICES = {
                  "wardrobe_tan"],
     "dresser": ["dresser", "dresser_alt", "dresser_black", "dresser_tan"],
     "counter": ["counter"] + [f"counter_{i}" for i in range(1, 8)],
+    # Every home used the same wooden shelf, and it is on nearly every room's
+    # list, so a whole town was that one sprite. One kind per home instead.
+    "shelf": ["shelf", "bookshelf", "metal_rack", "wall_cabinet"],
 }
 
 
@@ -441,7 +444,10 @@ def bed_against_wall(plan, idx: int, room, slots, occupied: set, door_tiles: set
             plan.furniture.append((bed, ax, ay, orient))
             occupied.update(got)
             occupied.update(foot)
-            if side_table and side_table in C.FURNITURE:
+            # A bedside table with no sprite for this wall is left out rather
+            # than drawn facing its own back; the bed still gets its wall.
+            if side_table and side_table in C.FURNITURE \
+                    and not (side in ("S", "E") and side_table in L.NORTH_WEST_ONLY):
                 t_or = L._facing(side_table, side)
                 for fx, fy in flank:
                     tc = L._cells_for(side_table, fx, fy, t_or)

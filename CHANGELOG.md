@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.4
+
+- **Furniture no longer faces the wrong way** (`knoxbuild/layout.py`). A piece
+  with only north and west sprites, stood against a south or east wall, is
+  drawn with its north sprite on the far edge of the tile: a corkboard hangs
+  a tile into the room, a rack faces its own back. Which pieces that applies
+  to was a list kept by hand, so anything added later was quietly wrong —
+  1,076 of them over 200 houses, corkboards and bedside tables worst. It is
+  worked out from the catalogue now, so a new piece cannot get it wrong.
+
+- **The same wooden shelf is not in every room any more**
+  (`knoxbuild/interiors.py`). It was on nearly every room's list and was one
+  fixed sprite, which made it the third commonest thing in a town at 5.9% of
+  all furniture. Each home now picks its own kind of shelving, so the
+  wooden one is 1.6% and a street is not built out of it.
+
 ## 1.4.3
 
 - **Every map now ships what a dedicated server needs**

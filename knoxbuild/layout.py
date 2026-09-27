@@ -1819,8 +1819,27 @@ SWITCHES_APART = 7
 # and mirrors on those walls rendered as planks floating over the floor. They
 # go on north and west walls only. (The switch has true east and south
 # sprites, and every room needs one, so it may go anywhere.)
-NORTH_WEST_ONLY = ({"painting", "mirror", "shelf"} | set(getattr(C, "ERIKA_WALL_ART", ()))
-                   | set(getattr(C, "ERIKA_SHOP_ADS", ())))
+# Pieces that read the same whichever wall they are against: a table has no
+# front, so the north sprite on a south wall is not wrong, it is just a table.
+_EITHER_WAY = {"table", "coffee_table", "dining_table", "diner_table",
+               "picnic_table", "pizza_table", "bath_mat", "rug", "rug_small",
+               "rug_wide", "shag_rug", "roof_ac", "roof_vent", "roof_hatch",
+               "elevator_door"}
+# Anything with no south or east sprite, worked out from the catalogue rather
+# than listed by hand. The fallback draws such a piece with its north or west
+# sprite, which puts it on the far edge of the tile: a corkboard on a south
+# wall hangs a tile into the room, a rack faces its own back. Listing them by
+# hand meant a role added later was quietly wrong, which is how 1076 pieces
+# in 200 houses ended up against a wall they have no sprite for.
+#
+# Painting, mirror and shelf are here despite having all four: on a south or
+# east wall they render as planks floating over the floor.
+NORTH_WEST_ONLY = (
+    {role for role, facings in C.FURNITURE.items() if set(facings) <= {"N", "W"}}
+    - _EITHER_WAY
+    | {"painting", "mirror", "shelf"}
+    | set(getattr(C, "ERIKA_WALL_ART", ()))
+    | set(getattr(C, "ERIKA_SHOP_ADS", ())))
 # With Erika's Tiles: shops hang its drinks and magazine posters instead of
 # paintings, and these rooms get a drinks machine.
 SHOP_DECOR_ROOMS = {"generalstore", "conveniencestore", "clothingstore", "cafe", "bar",

@@ -911,6 +911,56 @@ def check_rpath(check) -> None:
     shutil.rmtree(work, ignore_errors=True)
 
 
+def check_facing(check) -> None:
+    """Nothing is drawn against a wall it has no sprite for.
+
+    A piece with only north and west sprites, put against a south or east
+    wall, is drawn with its north sprite on the far edge of the tile: a
+    corkboard hangs a tile into the room, a rack faces its own back. The rule
+    was a list kept by hand, so a role added later was quietly wrong - 1076
+    pieces over 200 houses, mostly corkboards and bedside tables.
+    """
+    from knoxbuild import catalog as _C
+    from knoxbuild import layout as _L
+
+    no_se = {role for role, facings in _C.FURNITURE.items()
+             if set(facings) <= {"N", "W"}} - _L._EITHER_WAY
+    check(no_se <= set(_L.NORTH_WEST_ONLY),
+          f"every piece with no south or east sprite is kept off those walls "
+          f"({len(no_se)} of them)")
+
+    sizes = [(10, 9), (12, 10), (9, 11), (13, 10)]
+    wrong = shelves = pieces = 0
+    for i in range(48):
+        w, h = sizes[i % len(sizes)]
+        building = _L.build_building(w, h, levels=1 if i % 3 else 2, seed=i,
+                                     kind=None, commercial=False)
+        for storey in building.storeys:
+            for role, fx, fy, orient in storey.furniture:
+                if role != "switch":
+                    pieces += 1
+                if role == "shelf":
+                    shelves += 1
+                if role not in no_se or orient not in ("N", "W"):
+                    continue
+                idx = (storey.grid[fy][fx]
+                       if 0 <= fx < storey.width and 0 <= fy < storey.height else 0)
+                if not idx:
+                    continue
+                walls = {d for d, nx, ny in (("N", fx, fy - 1), ("S", fx, fy + 1),
+                                             ("W", fx - 1, fy), ("E", fx + 1, fy))
+                         if _L._room_at(storey, nx, ny) != idx}
+                if walls and not walls & {orient} and walls <= {"S", "E"}:
+                    wrong += 1
+    check(wrong == 0, f"and none of {pieces} pieces is facing the wrong way "
+                      f"({wrong})")
+    # One wooden shelf was on nearly every room's list and was the same sprite
+    # in every home, so a whole town was made of it.
+    check(shelves < pieces * 0.03,
+          f"no one piece of furniture is everywhere "
+          f"(the wooden shelf is {100.0 * shelves / max(1, pieces):.1f}%)")
+
+
 def check_qt_env(check) -> None:
     """The map compiler is made to find its own Qt, and a Qt that got away
     with it is explained rather than reported as a crash.
@@ -1827,6 +1877,7 @@ def main(argv: list[str]) -> int:
         check_procedural(check, work)
         check_qt_env(check)
         check_rpath(check)
+        check_facing(check)
         check_compile_failures(check, work)
         check_wall_corners(check)
         check_overture(check, work)
