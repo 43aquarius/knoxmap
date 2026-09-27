@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.4
+## 1.4.3.1
 
 - **Furniture no longer faces the wrong way** (`knoxbuild/layout.py`). A piece
   with only north and west sprites, stood against a south or east wall, is
