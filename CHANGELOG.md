@@ -17,6 +17,14 @@
   rather than an error. Installing now also reports the saves already on the
   PC, so the choice is in front of you at the moment it matters.
 
+- **The server notes cover what actually goes wrong.** A KnoxMap map is not
+  on the Workshop, so nothing fetches it for players — every one of them
+  needs the same folder, and a player without it falls through the world
+  where the map should be. A map built with Erika's Tiles says the server and
+  the players need that mod too, with the `Mods=` and `WorkshopItems=` lines
+  to match. Map folder names are case sensitive on the Linux servers most
+  people rent. There is a short list of symptoms and their causes at the end.
+
 ## 1.4.2
 
 - **The map compiler uses its own Qt plugins on Linux, not the machine's**

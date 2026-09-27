@@ -500,7 +500,7 @@ BIG_MAP_CELLS = 40
 
 
 def write_server_setup(mod_root: str, mod_id: str, name: str,
-                       map_folder: str) -> str:
+                       map_folder: str, needs_erika: bool = False) -> str:
     """The files and lines a dedicated server needs, ready to copy.
 
     A map mod is enough for a player on their own; a server needs three more
@@ -540,6 +540,11 @@ def write_server_setup(mod_root: str, mod_id: str, name: str,
         "1. Copy the folder holding this file into the server's mods folder,",
         "   the same place a player's mods go.",
         "",
+        "   AND give the same folder to every player, to put in their own",
+        "   Zomboid/mods. This map is not on the Steam Workshop, so nothing",
+        "   downloads it for them. A player without it is refused at the door",
+        "   or falls through the world where the map should be.",
+        "",
         "2. In your server's .ini (Zomboid/Server/<name>.ini), set:",
         "",
         f"      Mods={mod_id}",
@@ -549,7 +554,19 @@ def write_server_setup(mod_root: str, mod_id: str, name: str,
         "   definitions from it, and this map inherits them.",
         "   If either line already has entries, add to them with a semicolon",
         "   between - do not replace what is there.",
+        "   Spell both exactly as above. Most servers run Linux, where the",
+        "   map folder name is case sensitive and a wrong capital is simply",
+        "   a map that is not there.",
+        "",] + ([
+        f"   This map is built with Erika's Tiles, so the server needs that",
+        f"   mod as well and so does every player:",
         "",
+        f"      Mods={knoxpaths_module().ERIKAS_TILES_MOD_ID};{mod_id}",
+        f"      WorkshopItems={knoxpaths_module().ERIKAS_TILES_WORKSHOP_ID}",
+        "",
+        "   Without it the map loads with its tiles missing - walls and shop",
+        "   fronts you can see straight through.",
+        "",] if needs_erika else []) + [
         f"3. Copy server/{regions} into Zomboid/Server/ and rename it to",
         "   <your server name>_spawnregions.lua, matching the .ini's name.",
         "   Without it players spawn in Muldraugh, not here.",
@@ -561,12 +578,28 @@ def write_server_setup(mod_root: str, mod_id: str, name: str,
         "",
         "Changing the map later",
         "----------------------",
-        "Rebuild it, copy the mod over, and start a new world. Keeping the old",
-        "save is what causes the random failures people report - chunks that",
-        "were generated from the previous version of the map do not agree",
-        "with the new one, and the mismatch surfaces hours later as buildings",
-        "half-written, players falling through floors, or the server dying on",
-        "a cell it cannot read.",
+        "Rebuild it, copy the mod over to the server AND to every player, and",
+        "start a new world. Keeping the old save is what causes the random",
+        "failures people report - chunks that were generated from the previous",
+        "version of the map do not agree with the new one, and the mismatch",
+        "surfaces hours later as buildings half-written, players falling",
+        "through floors, or the server dying on a cell it cannot read.",
+        "",
+        "If something is wrong",
+        "---------------------",
+        "Players spawn in Muldraugh: the spawn region file is missing, or its",
+        "  name does not match the server's.",
+        "The map is not there at all: Map= is misspelled, or the mod is not in",
+        "  Mods=, or the server was not restarted.",
+        "One player falls through the world and the rest are fine: that player",
+        "  has not got the mod, or has an older build of it than the server.",
+        "Walls and shop fronts you can see through: Erika's Tiles is missing.",
+        "Odd failures on a world that has been played: the map was added or",
+        "  changed after the world was made. Start a new one.",
+        "",
+        "Nothing in this map needs the server to run any of KnoxMap's own Lua",
+        "except the rifle cache, which is server side and looks after itself.",
+        "The Reset loot menu is single player only and says so when clicked.",
     ]
     path = os.path.join(mod_root, "SERVER SETUP.txt")
     with open(path, "w", encoding="utf-8") as f:
@@ -747,7 +780,9 @@ def package(project_dir: str, name: str, mod_id: str,
     # which matches no mod at all, so the game let the map load with the
     # tiles missing. A missing tile draws as nothing, which is why players
     # saw shop fronts and walls they could see straight through.
-    if any(f.endswith(".lotheader") and b"_erika_" in open(f, "rb").read() for f in cells):
+    uses_erika = any(f.endswith(".lotheader") and b"_erika_" in open(f, "rb").read()
+                     for f in cells)
+    if uses_erika:
         info += f"require={knoxpaths_module().ERIKAS_TILES_MOD_ID}\n"
     os.makedirs(os.path.join(mod_root, "42"), exist_ok=True)
     for where in ("", "common", "42"):
@@ -760,7 +795,8 @@ def package(project_dir: str, name: str, mod_id: str,
     big_map = n_cells >= BIG_MAP_CELLS
     write_how_to_play(mod_root, name, n_cells, big_map)
     regions = write_server_setup(mod_root, mod_id, name,
-                                 folder_name(name, mod_id))
+                                 folder_name(name, mod_id),
+                                 needs_erika=uses_erika)
     n_pois = write_spawn_selector(project_dir, mod_root, mod_id, name)
     reset_loot = write_reset_loot(mod_root)
     gun_cache = write_gun_cache(project_dir, mod_root, mod_id)

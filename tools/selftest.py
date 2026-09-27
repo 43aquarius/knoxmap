@@ -2137,7 +2137,7 @@ def main(argv: list[str]) -> int:
         # naming this map's spawnpoints. And the warning that matters most -
         # a world keeps the cells it has already made, so a map added to one
         # that exists fails in ways nobody can trace back.
-        from make_map_mod import folder_name
+        from make_map_mod import folder_name, write_server_setup
         map_folder = folder_name("Selftest: Town", "selftest")
         setup = os.path.join(mod_root, "SERVER SETUP.txt")
         regions = os.path.join(mod_root, "server",
@@ -2148,6 +2148,17 @@ def main(argv: list[str]) -> int:
               "the server's Mods= and Map= lines are written out with real names")
         check("BEFORE anyone joins" in said and "new world" in said,
               "and it says to add the map before the world exists")
+        check("every player" in said and "Workshop" in said,
+              "and that every player needs the mod too, it not being on the "
+              "Workshop")
+        erika = write_server_setup(os.path.join(work, "erika-notes"), "m",
+                                   "M", "M", needs_erika=True)
+        with_erika = open(os.path.join(work, "erika-notes", "SERVER SETUP.txt"),
+                          encoding="utf-8").read()
+        check("Erikas_Tiles" in with_erika and "WorkshopItems=" in with_erika
+              and "Erikas_Tiles" not in said,
+              f"a map built with Erika's Tiles says the server needs them, and "
+              f"one without does not ({erika})")
         check("function SpawnRegions()" in lua
               and f'media/maps/{map_folder}/spawnpoints.lua' in lua
               and "Muldraugh, KY" in lua,
