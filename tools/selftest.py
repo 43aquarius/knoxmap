@@ -984,6 +984,27 @@ def check_facing(check) -> None:
           f"and a house's rooms have household shelving, not warehouse racking "
           f"({dict(strays) if strays else 'none'})")
 
+    # A wall cabinet is an upper cupboard on the roof layer: it draws over a
+    # counter and belongs above one. Offered as a shelf, it stood on its own
+    # on any wall with nothing underneath.
+    loose = rooms_with = 0
+    for i in range(48):
+        w, h = sizes[i % len(sizes)]
+        building = _L.build_building(w, h, levels=1 if i % 3 else 2, seed=i,
+                                     kind=None, commercial=False)
+        for storey in building.storeys:
+            counters = {(x, y) for role, x, y, _o in storey.furniture
+                        if role.startswith("counter")}
+            for role, fx, fy, _o in storey.furniture:
+                if role != "wall_cabinet":
+                    continue
+                rooms_with += 1
+                if (fx, fy) not in counters:
+                    loose += 1
+    check(loose <= rooms_with * 0.02,
+          f"and a wall cabinet hangs over a counter, not on a bare wall "
+          f"({loose} of {rooms_with} do not)")
+
 
 def check_qt_env(check) -> None:
     """The map compiler is made to find its own Qt, and a Qt that got away

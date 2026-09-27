@@ -13,10 +13,11 @@
 - **A shelf is whatever that room would really have** (`knoxbuild/layout.py`).
   One generic wooden shelf was on nearly every room's list and was always the
   same sprite, which made it the third commonest object in a town at 5.9% of
-  all furniture. The room picks now: wall cabinets in kitchens and bathrooms,
-  bookshelves in living rooms, bedrooms and libraries, wire racking only in
-  storerooms, garages and works. The wooden shelf is 2.8% and nobody has a
-  warehouse rack in their bathroom.
+  all furniture. The room picks now: bookshelves in living rooms, bedrooms,
+  studies and libraries, a shelf or a chest of drawers in bathrooms, wire
+  racking and crates only in storerooms, garages and works. The wooden shelf
+  is 3.5%, nobody has a warehouse rack in their bathroom, and a wall cabinet
+  hangs over a kitchen counter rather than standing on a bare wall.
 
 ## 1.4.3
 

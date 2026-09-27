@@ -1369,10 +1369,14 @@ MIN_WALL_FOR_WINDOW = 3
 # shelf is a different piece of furniture in a kitchen, a study and a garage,
 # so the room picks, and only a room that would really have one gets the
 # racking.
+# wall_cabinet is not in here on purpose. It is an upper cabinet that hangs
+# above a counter, on the roof layer so it draws over one, and the kitchen
+# already puts them there. Offering it as a shelf stood one on any wall with
+# nothing underneath, taking floor space it does not stand on.
 SHELVING = {
-    "bathroom": ("shelf", "wall_cabinet"),
-    "kitchen": ("wall_cabinet", "shelf"),
-    "laundry": ("shelf", "wall_cabinet"),
+    "bathroom": ("shelf", "dresser"),
+    "kitchen": ("shelf",),
+    "laundry": ("shelf", "dresser"),
     "livingroom": ("bookshelf", "shelf"),
     "dining": ("bookshelf", "shelf"),
     "bedroom": ("bookshelf", "shelf"),
