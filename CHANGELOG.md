@@ -2,6 +2,16 @@
 
 ## 1.4.3
 
+- **A busy Overpass server no longer loses the map** (`generator/osm.py`). One
+  tile failing threw the whole download away uncached, so a town that fetched
+  forty tiles and missed one started again from nothing. The tiles that
+  arrived are kept and only the ones that did not are asked for again. A tile
+  nothing answered in time is also quartered and retried, as a tile the server
+  refuses outright already was — bounded, so a dropped connection costs eight
+  requests rather than sixty-four. Added `overpass.osm.ch` as a fourth
+  endpoint, and the failure now says how many tiles were missing and what to
+  do about it.
+
 - **Furniture is cleared out of the way of doorways** (`knoxbuild/layout.py`).
   Rooms were furnished one at a time, so a shelf could land in the only
   doorway and a counter could span the only way through. The plan was always

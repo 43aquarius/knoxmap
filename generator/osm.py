@@ -25,6 +25,9 @@ OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
+    # A fourth, because the other three go busy together: when one instance
+    # is queueing the people it turned away are queueing on the next.
+    "https://overpass.osm.ch/api/interpreter",
 ]
 
 # OSM's usage policy requires a real identifying User-Agent; the mirrors return
@@ -168,9 +171,12 @@ def _build_query(south: float, west: float, north: float, east: float,
 class OverpassError(RuntimeError):
     """A failed query, with whether a smaller bbox would plausibly succeed."""
 
-    def __init__(self, message: str, too_big: bool = False):
+    def __init__(self, message: str, too_big: bool = False,
+                 timed_out: bool = False):
         super().__init__(message)
         self.too_big = too_big
+        # Nothing answered at all, as opposed to answering with a refusal.
+        self.timed_out = timed_out
 
 
 # Overpass says "query timed out" and "out of memory" with HTTP 400, the same
@@ -240,6 +246,7 @@ def fetch_features(south: float, west: float, north: float, east: float,
     query = _build_query(south, west, north, east, timeout=timeout)
     errors: list[str] = []
     too_big = False
+    timed_out = False
     order = OVERPASS_ENDPOINTS[first % len(OVERPASS_ENDPOINTS):]         + OVERPASS_ENDPOINTS[:first % len(OVERPASS_ENDPOINTS)]
     for endpoint in order:
         host = endpoint.split("/")[2]
@@ -250,11 +257,13 @@ def fetch_features(south: float, west: float, north: float, east: float,
             too_big = too_big or exc.too_big
         except requests.Timeout:
             errors.append(f"{host}: no answer within {timeout + 10}s")
+            timed_out = True
         except (requests.RequestException, ValueError) as exc:
             errors.append(f"{host}: {exc}")
         time.sleep(1)
     raise OverpassError("every Overpass endpoint failed — "
-                        + "; ".join(errors), too_big=too_big)
+                        + "; ".join(errors), too_big=too_big,
+                        timed_out=timed_out)
 
 
 def _area_km2(south: float, west: float, north: float, east: float) -> float:
@@ -308,29 +317,63 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
     # There are three independent servers; a tile is handed to each in turn and
     # they work at the same time, so the download takes about as long as the
     # slowest tile rather than the sum of all of them.
-    done = 0
+    done = [0]
     lock = threading.Lock()
 
-    def run(args) -> list[OSMFeature]:
-        nonlocal done
+    def run(args):
         index, (s0, w0, n0, e0) = args
         # Between tiles is the one place a download can be dropped without
         # leaving a half-written cache behind; the tiles already in flight
         # finish and are thrown away with the rest.
         knoxstop.check(should_stop, "the download")
         try:
-            return _fetch_splitting(s0, w0, n0, e0, timeout, first=index)
+            return index, _fetch_splitting(s0, w0, n0, e0, timeout,
+                                           first=index), None
+        except OverpassError as exc:
+            return index, None, exc
         finally:
             with lock:
-                done += 1
+                done[0] += 1
                 if progress:
-                    progress(done, total)
+                    progress(min(done[0], total), total)
 
+    # One tile failing used to lose the map: the whole download was thrown
+    # away and nothing was cached, so a town that had fetched forty tiles and
+    # missed one started again from nothing. The tiles that arrived are kept
+    # and only the ones that did not are asked for again - a public instance
+    # that was busy a moment ago usually is not a minute later.
     workers = min(len(OVERPASS_ENDPOINTS), total)
-    with futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        for feats in pool.map(run, enumerate(tiles)):
-            for feat in feats:
-                merged[(feat.kind, feat.osm_id)] = feat
+    left = list(enumerate(tiles))
+    problems: dict[int, OverpassError] = {}
+    for attempt in range(TILE_ATTEMPTS):
+        if attempt:
+            for _ in range(RETRY_PAUSE_S):
+                knoxstop.check(should_stop, "the download")
+                time.sleep(1.0)
+        done[0] = total - len(left)
+        problems = {}
+        again = []
+        with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            for index, feats, exc in pool.map(run, left):
+                if exc is not None:
+                    problems[index] = exc
+                    again.append((index, tiles[index]))
+                    continue
+                for feat in feats:
+                    merged[(feat.kind, feat.osm_id)] = feat
+        left = again
+        if not left:
+            break
+
+    if left:
+        worst = problems[left[0][0]]
+        raise OverpassError(
+            f"{len(left)} of {total} map tiles would not download. The public "
+            f"Overpass servers are shared and go busy; waiting a few minutes "
+            f"and generating again usually works, and a smaller area always "
+            f"does. {worst}",
+            too_big=any(e.too_big for e in problems.values()),
+            timed_out=all(e.timed_out for e in problems.values()))
 
     return list(merged.values())
 
@@ -338,6 +381,16 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
 # Below this, a tile is small enough that a refusal is the server's problem
 # rather than the area's, and splitting further only multiplies the requests.
 MIN_SPLIT_KM2 = 0.5
+# A tile nothing answered in time is usually a tile too heavy to answer, so it
+# is quartered like a refused one - but only while it is big enough for that to
+# be the reason, and only one level down. Past that it is the network rather
+# than the area, and splitting only takes four times as long to say so.
+TIMEOUT_SPLIT_KM2 = 4.0
+TIMEOUT_SPLIT_DEPTH = 1
+# How many passes over the tiles a map gets, and how long to leave the servers
+# alone between them.
+TILE_ATTEMPTS = 2
+RETRY_PAUSE_S = 20
 
 
 def _fetch_splitting(south: float, west: float, north: float, east: float,
@@ -355,7 +408,10 @@ def _fetch_splitting(south: float, west: float, north: float, east: float,
         return fetch_features(south, west, north, east, timeout=timeout,
                               first=first)
     except OverpassError as exc:
-        if not exc.too_big or depth >= 3                 or _area_km2(south, west, north, east) <= MIN_SPLIT_KM2:
+        area = _area_km2(south, west, north, east)
+        heavy = exc.too_big or (exc.timed_out and depth < TIMEOUT_SPLIT_DEPTH
+                                and area > TIMEOUT_SPLIT_KM2)
+        if not heavy or depth >= 3 or area <= MIN_SPLIT_KM2:
             raise
     mid_lat = (south + north) / 2
     mid_lon = (west + east) / 2

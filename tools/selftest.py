@@ -1331,6 +1331,80 @@ def check_memory_guard(check) -> None:
         knoxlog.memory_status = real
 
 
+def check_overpass_retry(check) -> None:
+    """A busy Overpass server does not lose the map.
+
+    The public instances are shared and go busy together. A tile that nothing
+    answered used to fail the whole download: every tile that had arrived was
+    thrown away uncached, so a town that fetched forty and missed one started
+    again from nothing. Nothing here touches the network.
+    """
+    import requests
+
+    from generator import osm as _osm
+
+    was_split, was_ask, was_pause = (_osm._fetch_splitting, _osm._ask,
+                                     _osm.RETRY_PAUSE_S)
+    try:
+        _osm.RETRY_PAUSE_S = 0
+        seen: dict = {}
+        ids: dict = {}
+
+        def once_then_works(south, west, north, east, timeout, depth=0, first=0):
+            key = (round(south, 4), round(west, 4))
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] == 1:
+                raise _osm.OverpassError("busy", timed_out=True)
+            # One feature per tile, each with an id of its own: the tiles are
+            # merged on (kind, id), so a shared id would hide a lost tile.
+            return [_osm.OSMFeature(osm_id=ids.setdefault(key, len(ids) + 1),
+                                    kind="way", tags={},
+                                    geometry=[(west, south)])]
+
+        _osm._fetch_splitting = once_then_works
+        got = _osm.fetch_features_tiled(50.0, 5.0, 50.2, 5.3, max_tile_km2=30.0)
+        check(len(got) == len(seen) and len(seen) > 1,
+              f"a tile that fails once is asked for again, and the map still "
+              f"arrives ({len(seen)} tiles)")
+
+        def never_works(south, west, north, east, timeout, depth=0, first=0):
+            raise _osm.OverpassError("every Overpass endpoint failed — busy",
+                                     timed_out=True)
+
+        _osm._fetch_splitting = never_works
+        try:
+            _osm.fetch_features_tiled(50.0, 5.0, 50.2, 5.3, max_tile_km2=30.0)
+            said = ""
+        except _osm.OverpassError as exc:
+            said = str(exc)
+        check("tiles would not download" in said and "smaller area" in said,
+              "and when they all fail it says how many and what to do")
+
+        # A tile nothing answers is quartered like a refused one, but the
+        # splitting has to stop: on a dropped connection every request times
+        # out, and each one waits out the clock before it says so.
+        _osm._fetch_splitting = was_split
+        tries = []
+
+        def dead(endpoint, query, timeout):
+            tries.append(endpoint)
+            raise requests.Timeout("no answer")
+
+        _osm._ask = dead
+        side = (30.0 ** 0.5) / 111.32
+        for area, ceiling in ((side, 3), (side / 6, 2)):
+            tries.clear()
+            try:
+                _osm._fetch_splitting(50.0, 5.0, 50.0 + area, 5.0 + area, 30)
+            except _osm.OverpassError:
+                pass
+            check(len(tries) <= ceiling * len(_osm.OVERPASS_ENDPOINTS),
+                  f"a tile nobody answers gives up after {len(tries)} requests")
+    finally:
+        _osm._fetch_splitting, _osm._ask = was_split, was_ask
+        _osm.RETRY_PAUSE_S = was_pause
+
+
 def check_no_size_wall(check, work: str) -> None:
     """An area bigger than the comfortable one is still built.
 
@@ -1925,6 +1999,7 @@ def main(argv: list[str]) -> int:
         check_straight_roads(check)
         check_mapstate(check, out)
         check_no_size_wall(check, work)
+        check_overpass_retry(check)
         check_memory_guard(check)
         check_box_any(check)
 
