@@ -2,6 +2,15 @@
 
 ## 1.4.3
 
+- **Corridors and stair halls are dressed, not blank** (`knoxbuild/layout.py`).
+  Nothing may stand in a corridor — a flat's front door and the only way past
+  the flight both run through it — so ours carried one picture every third
+  slot and nothing else, 1.6 pieces per 10 m² against Knox County's 7.1. The
+  walls now take pictures, mirrors and a corkboard along their inside faces,
+  and rugs go on the floor, which is the one thing you can walk over. 1.6 →
+  6.8 per 10 m². Most of the facade is left clear so the windows keep their
+  columns up the front of the building.
+
 - **The map compiler now loads its own Qt on Linux, whatever
   `LD_LIBRARY_PATH` says** (`knoxpaths.py`, `worlded-linux.yml`). The bundled
   binaries recorded their library folder as DT_RUNPATH, which the loader

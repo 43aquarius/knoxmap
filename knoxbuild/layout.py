@@ -1361,6 +1361,13 @@ SERVICE_WINDOW_CAP = {"garage": 0, "elevator": 0, "shed": 1}
 # Those rooms still get windows from the bays; they just are not promised one.
 LIVED_IN = {"livingroom", "bedroom", "kidsbedroom", "kitchen", "classroom", "restaurant"}
 MIN_WALL_FOR_WINDOW = 3
+# What goes on a corridor's walls, and how much of its facade may be used
+# before the windows lose their columns. Rugs go on the floor because they
+# are the one thing you can walk over.
+CORE_WALL_ART = ("painting", "mirror", "painting", "corkboard")
+CORE_FACADE_SHARE = 4
+CORE_RUGS = ("rug", "rug_wide", "rug_small")
+CORE_RUG_EVERY = 3
 
 
 def _facade_runs(grid: list[list[int]]) -> list[tuple[str, list[tuple[int, int, str, int, int]]]]:
@@ -2100,17 +2107,31 @@ def _furnish(plan: Plan, rng: random.Random,
                 if hang(SWITCH, x, y, facing):
                     break
 
-        # Nothing else goes in the stair hall or corridor: a flat's front door
-        # and the only way past the flight both run through it, and one
+        keep_clear = door_tiles | stair_tiles
+        # Nothing standing goes in the stair hall or corridor: a flat's front
+        # door and the only way past the flight both run through it, and one
         # bookcase beside the stairs closes the corridor.
         if r.is_core:
-            # Nothing standing, but the walls are fair game: Knox County's
-            # halls carry 7 pieces per 10 m2 and ours carried none.
-            for n, (x, y, facing) in enumerate(sorted(slots, key=on_facade)):
-                if n % 3 == 0:
-                    hang(("painting", "mirror", "painting")[n % 9 // 3], x, y, facing)
+            # The walls are fair game, though, and a rug is walked over.
+            # Knox County's halls carry 7 pieces per 10 m2; hanging one every
+            # third slot and nothing else left ours at 1.6, which is what a
+            # corridor of blank walls reads as.
+            inside = [s for s in slots if not on_facade(s)]
+            facade = [s for s in slots if on_facade(s)]
+            # Inside walls first and most of the facade left alone, because
+            # the windows are laid out last and in columns: a picture on a
+            # bay takes it and leaves a hole up the front of the building.
+            hung = 0
+            for slot in inside + facade[:max(1, len(facade) // CORE_FACADE_SHARE)]:
+                if hang(CORE_WALL_ART[hung % len(CORE_WALL_ART)], *slot):
+                    hung += 1
+            for n, (x, y) in enumerate(
+                    (x, y) for y in range(r.y0, r.y1 + 1)
+                    for x in range(r.x0, r.x1 + 1)
+                    if plan.grid[y][x] == idx and (x, y) not in keep_clear):
+                if n % CORE_RUG_EVERY == 0:
+                    plan.furniture.append((rng.choice(CORE_RUGS), x, y, "N"))
             continue
-        keep_clear = door_tiles | stair_tiles
         # A shop's sales floor is fitted out as a whole - rows of shelving,
         # the till by the door - not from a list pushed against its walls.
         if r.kind in interiors.STORES and interiors.furnish_store(
