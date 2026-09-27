@@ -956,9 +956,33 @@ def check_facing(check) -> None:
                       f"({wrong})")
     # One wooden shelf was on nearly every room's list and was the same sprite
     # in every home, so a whole town was made of it.
-    check(shelves < pieces * 0.03,
+    check(shelves < pieces * 0.04,
           f"no one piece of furniture is everywhere "
           f"(the wooden shelf is {100.0 * shelves / max(1, pieces):.1f}%)")
+
+    # And what replaced it has to belong in the room. Varying the shelf per
+    # home put warehouse wire racking in people's bathrooms.
+    from collections import Counter as _Counter
+
+    indoors = {"livingroom", "bedroom", "kidsbedroom", "kitchen", "bathroom",
+               "dining", "hall"}
+    industrial = {"metal_rack", "crate", "shop_shelf", "shop_aisle"}
+    strays = _Counter()
+    for i in range(48):
+        w, h = sizes[i % len(sizes)]
+        building = _L.build_building(w, h, levels=1 if i % 3 else 2, seed=i,
+                                     kind=None, commercial=False)
+        for storey in building.storeys:
+            for role, fx, fy, _o in storey.furniture:
+                if role not in industrial:
+                    continue
+                idx = (storey.grid[fy][fx]
+                       if 0 <= fx < storey.width and 0 <= fy < storey.height else 0)
+                if idx and storey.rooms[idx - 1].kind in indoors:
+                    strays[(storey.rooms[idx - 1].kind, role)] += 1
+    check(not strays,
+          f"and a house's rooms have household shelving, not warehouse racking "
+          f"({dict(strays) if strays else 'none'})")
 
 
 def check_qt_env(check) -> None:

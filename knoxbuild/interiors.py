@@ -383,9 +383,6 @@ CHOICES = {
                  "wardrobe_tan"],
     "dresser": ["dresser", "dresser_alt", "dresser_black", "dresser_tan"],
     "counter": ["counter"] + [f"counter_{i}" for i in range(1, 8)],
-    # Every home used the same wooden shelf, and it is on nearly every room's
-    # list, so a whole town was that one sprite. One kind per home instead.
-    "shelf": ["shelf", "bookshelf", "metal_rack", "wall_cabinet"],
 }
 
 

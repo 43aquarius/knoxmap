@@ -1361,6 +1361,34 @@ SERVICE_WINDOW_CAP = {"garage": 0, "elevator": 0, "shed": 1}
 # Those rooms still get windows from the bays; they just are not promised one.
 LIVED_IN = {"livingroom", "bedroom", "kidsbedroom", "kitchen", "classroom", "restaurant"}
 MIN_WALL_FOR_WINDOW = 3
+# What "a shelf" is, by the room it stands in.
+#
+# One generic wooden shelf was on nearly every room's list and was always the
+# same sprite, which made it the third commonest object in a town. Varying it
+# per home was worse: it put warehouse wire racking in people's bathrooms. A
+# shelf is a different piece of furniture in a kitchen, a study and a garage,
+# so the room picks, and only a room that would really have one gets the
+# racking.
+SHELVING = {
+    "bathroom": ("shelf", "wall_cabinet"),
+    "kitchen": ("wall_cabinet", "shelf"),
+    "laundry": ("shelf", "wall_cabinet"),
+    "livingroom": ("bookshelf", "shelf"),
+    "dining": ("bookshelf", "shelf"),
+    "bedroom": ("bookshelf", "shelf"),
+    "kidsbedroom": ("bookshelf", "shelf"),
+    "hall": ("shelf", "bookshelf"),
+    "office": ("bookshelf", "filing_cabinet"),
+    "library": ("bookshelf",),
+    "classroom": ("bookshelf", "shelf"),
+    "storage": ("metal_rack", "crate", "shelf"),
+    "garage": ("metal_rack", "crate"),
+    "shed": ("metal_rack", "shelf"),
+    "warehouse": ("metal_rack", "crate"),
+    "factory": ("metal_rack", "crate"),
+    "workshop": ("metal_rack", "shelf"),
+}
+DEFAULT_SHELVING = ("shelf", "bookshelf")
 # What goes on a corridor's walls, and how much of its facade may be used
 # before the windows lose their columns. Rugs go on the floor because they
 # are the one thing you can walk over.
@@ -2187,7 +2215,10 @@ def _furnish(plan: Plan, rng: random.Random,
         elif r.kind == "bathroom" and plan.kind not in HOUSE_LIKE_KINDS | {"apartment"}:
             # A shop's or an office's toilet, not a family bathroom with a bath.
             base = ["toilet", "sink", "mirror", "toilet"]
-        base = [pal.get(role, role) for role in base]
+        shelving = [s for s in SHELVING.get(r.kind, DEFAULT_SHELVING)
+                    if s in C.FURNITURE] or ["shelf"]
+        base = [rng.choice(shelving) if role == "shelf" else pal.get(role, role)
+                for role in base]
         if _erika_ready():
             # With Erika's Tiles installed, pictures and plants come from its
             # far larger range, so no two living rooms hang the same print.

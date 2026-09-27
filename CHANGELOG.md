@@ -10,11 +10,13 @@
   1,076 of them over 200 houses, corkboards and bedside tables worst. It is
   worked out from the catalogue now, so a new piece cannot get it wrong.
 
-- **The same wooden shelf is not in every room any more**
-  (`knoxbuild/interiors.py`). It was on nearly every room's list and was one
-  fixed sprite, which made it the third commonest thing in a town at 5.9% of
-  all furniture. Each home now picks its own kind of shelving, so the
-  wooden one is 1.6% and a street is not built out of it.
+- **A shelf is whatever that room would really have** (`knoxbuild/layout.py`).
+  One generic wooden shelf was on nearly every room's list and was always the
+  same sprite, which made it the third commonest object in a town at 5.9% of
+  all furniture. The room picks now: wall cabinets in kitchens and bathrooms,
+  bookshelves in living rooms, bedrooms and libraries, wire racking only in
+  storerooms, garages and works. The wooden shelf is 2.8% and nobody has a
+  warehouse rack in their bathroom.
 
 ## 1.4.3
 
