@@ -272,12 +272,19 @@ STYLE_AS = {"military": "industrial", "fire": "industrial",
 def looks_like_apartment(tags: dict, area_tiles: int, rng,
                          settings: Settings) -> bool:
     """Whether an untagged building should be treated as a block of flats."""
-    # A mapper who recorded a height or a floor count has told us what this
-    # is, whatever its footprint: three storeys up is a block of flats and one
-    # storey is not, and neither needs guessing at.
+    # A mapper who recorded a height or a floor count has told us something,
+    # but not everything. Three storeys up is a block of flats and one storey
+    # is not; two says nothing, because a terraced row is two storeys and so
+    # is a bungalow with an attic, and the footprint is what separates them.
+    #
+    # Taking two at face value made every large 2-storey building one house,
+    # at any size: a 1200-tile terrace came out as a single dwelling with 25
+    # rooms, six bedrooms and five bathrooms.
     measured = levels_from_tags(tags, settings)
-    if measured is not None:
-        return measured >= 3
+    if measured is not None and measured >= 3:
+        return True
+    if measured == 1:
+        return False
     if area_tiles < settings.apartment_footprint:
         return False
     if (tags.get("building") or "").lower() in ("house", "detached", "bungalow"):

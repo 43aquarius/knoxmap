@@ -9,6 +9,17 @@
   least one room nobody could walk into and 3,030 rooms of 34,331 were sealed
   off. Now none, for 0.42% of the furniture.
 
+- **A big two-storey building is flats, not one enormous house**
+  (`knoxbuild/build.py`). A floor count of two used to settle it whatever the
+  footprint, so a terraced row came out as a single dwelling: on a 23x19
+  building, 43 rooms with 24 bedrooms, two bathrooms and one kitchen. Two
+  storeys says nothing on its own — a terrace is two and so is a bungalow
+  with an attic — so the footprint decides, as it already did for a building
+  with no floor count at all. The same building now lays out as eight flats
+  with a kitchen, a bathroom and a living room each. One storey is still a
+  house at any size, three or more is still flats, and `building=house` is
+  still believed.
+
 ## 1.4.2
 
 - **Paper map outlines are checked again after they are rounded to whole

@@ -291,6 +291,55 @@ def check_1_3_6(check, out: str, tbx: list[str], pzw_text: str, log: str) -> Non
     shutil.rmtree(beside, ignore_errors=True)
 
 
+def check_dwellings(check) -> None:
+    """A big building is homes, not one enormous house.
+
+    A floor count of two used to settle it whatever the footprint, so a
+    1200-tile terraced row came out as a single dwelling with 43 rooms, 24
+    bedrooms and one kitchen. Two storeys says nothing on its own - a terrace
+    is two and so is a bungalow with an attic - so the footprint decides.
+    """
+    import random as _random
+    from collections import Counter as _Counter
+
+    from knoxbuild.build import looks_like_apartment
+    from knoxbuild.layout import build_building
+    from knoxbuild.settings import Settings
+
+    settings = Settings()
+    big, small = 4 * settings.apartment_footprint, settings.apartment_footprint // 2
+
+    def share(tags, area):
+        return sum(looks_like_apartment(tags, area, _random.Random(k), settings)
+                   for k in range(200)) / 200.0
+
+    check(share({"building": "yes", "building:levels": "2"}, big) > 0.3,
+          "a big two-storey building can be flats")
+    check(share({"building": "yes", "building:levels": "2"}, small) == 0,
+          "a small one is still somebody's house")
+    check(share({"building": "yes", "building:levels": "1"}, big) == 0,
+          "and a single storey is a house whatever its footprint")
+    check(share({"building": "yes", "building:levels": "6"}, small) == 1,
+          "six storeys is flats however small the footprint")
+    check(share({"building": "house", "building:levels": "2"}, big) == 0,
+          "a mapper who wrote building=house is believed")
+
+    # And what it turns into has to read as homes: a kitchen and a bathroom
+    # each, not two dozen bedrooms sharing one.
+    kinds = _Counter()
+    for seed in range(12):
+        b = build_building(23, 19, levels=2, seed=seed, kind="apartment")
+        for storey in b.storeys:
+            for room in storey.rooms:
+                kinds[room.kind] += 1
+    beds = kinds["bedroom"] + kinds["kidsbedroom"]
+    check(kinds["kitchen"] >= 4 and kinds["bathroom"] >= 4
+          and beds <= 4 * kinds["kitchen"],
+          f"and it comes out as flats with their own rooms "
+          f"({kinds['kitchen'] / 12:.0f} kitchens, {kinds['bathroom'] / 12:.0f} "
+          f"bathrooms, {beds / 12:.0f} bedrooms per building)")
+
+
 def check_street_zombies(check) -> None:
     """Zombies where the streets are, not only inside the buildings: a town
     mapped without its houses used to come out empty."""
@@ -1645,6 +1694,7 @@ def main(argv: list[str]) -> int:
         check(len(school) >= 1, "the school has classrooms")
         check_1_3_6(check, out, tbx, pzw_text, log.getvalue())
         check_street_zombies(check)
+        check_dwellings(check)
         check_stop(check)
         check_portable(check)
         texts = [open(p, encoding="utf-8").read() for p in tbx]
