@@ -2,6 +2,16 @@
 
 ## 1.4.3
 
+- **Doors no longer sit on a wall corner, where the game draws neither door
+  nor wall** (`knoxbuild/layout.py`). A tile carrying both a west and a north
+  wall is one corner piece, and a door on one comes out as blank wall — a
+  doorway that will not open. On a built town map 989 doors of 57,357 were on
+  one, spread over 741 buildings. A stuck door now moves to a clean wall the
+  room shares with some other neighbour, not just to the same boundary, and
+  every move is checked so nothing is shut off and a flat keeps exactly one
+  front door. 1.69% of doors → 0.057%, and `audit_layouts.py` fails if the
+  rate climbs back.
+
 - **A busy Overpass server no longer loses the map** (`generator/osm.py`). One
   tile failing threw the whole download away uncached, so a town that fetched
   forty tiles and missed one started again from nothing. The tiles that

@@ -1446,15 +1446,17 @@ def _doors_off_corners(storey, edges: set, corners: set) -> int:
     """Slide a door off an inside corner, where there is somewhere to slide to.
 
     A door has the same trouble a window does - BuildingEd draws a tile
-    carrying both a west and a north wall as one corner piece, and a door
-    replaces it with a door facing one way, losing the other half. A door
-    cannot simply be dropped, though: the room behind it may have no other
-    way in. So it moves along its own wall to the nearest tile that is not a
-    corner and has the same two rooms either side of it, and if there is no
-    such tile it stays where it is - a door in a broken corner still beats a
-    room nobody can enter.
+    carrying both a west and a north wall as one corner piece, and a door on
+    one comes out as neither door nor wall. On a shipped town map 989 doorways
+    of 57,357 sat on one, over 741 buildings, which is what a player reads as
+    a door that will not open.
+
+    It moves along its own wall to the nearest tile that is not a corner, and
+    where that whole boundary is corners - a stepped diagonal wall is one or
+    two tiles long - to a clean wall the room shares with some other
+    neighbour. Never at the cost of shutting a room off: every swap is checked
+    against the rooms that could be reached before it.
     """
-    taken = set(storey.doors)
     keep_off = set(storey.party) | set(getattr(storey, "wall_pieces", ()))
     # Every wall that is not a corner, by the pair of rooms it stands between.
     # Sliding along the door's own wall is not enough: a stepped diagonal side
@@ -1466,20 +1468,81 @@ def _doors_off_corners(storey, edges: set, corners: set) -> int:
         if (ex, ey) in corners or (ex, ey, ed) in keep_off:
             continue
         boundary.setdefault(_sides_of(storey.grid, ex, ey, ed), []).append((ex, ey, ed))
+
+    def homes(pair) -> tuple:
+        """Which dwellings a wall stands between; -1 is the outside."""
+        return tuple(sorted(storey.rooms[r - 1].unit if r else -1 for r in pair))
+
+    def joinable(pair) -> bool:
+        """Whether a door may hang between these two rooms at all."""
+        a, b = pair
+        if a == b or (a and storey.rooms[a - 1].is_shaft) \
+                or (b and storey.rooms[b - 1].is_shaft):
+            return False
+        # Never a door from one person's flat into the next.
+        ua, ub = homes(pair)
+        return not (ua > 0 and ub > 0 and ua != ub)
+
+    # Not from outside: a floor above the ground has no outside door, so a
+    # walk that started there reached nothing and the check below waved
+    # everything through. From a room, so it holds on every storey, and with
+    # the outside among the rooms it reaches, so a front door cannot be moved
+    # indoors either.
+    start = next((i for i, r in enumerate(storey.rooms, 1) if not r.is_shaft), 0)
+
+    def reaches(doors) -> set:
+        """What can be walked to from inside, through doors alone. 0 is the
+        outside, so it is in the set when a way in survives."""
+        adj: dict[int, set] = {}
+        for (x, y, d) in doors:
+            a, b = _sides_of(storey.grid, x, y, d)
+            if a == b:
+                continue
+            adj.setdefault(a, set()).add(b)
+            adj.setdefault(b, set()).add(a)
+        seen, stack = {start}, [start]
+        while stack:
+            here = stack.pop()
+            # The outside counts as reached, so a way in cannot be moved
+            # away, but it is not a corridor: going out of the front door and
+            # round to the back is not how a room is got into.
+            if here == 0:
+                continue
+            for nxt in adj.get(here, ()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        return seen
+
     moved = 0
     for i, (x, y, d) in enumerate(storey.doors):
         if (x, y) not in corners:
             continue
         want = _sides_of(storey.grid, x, y, d)
+        taken = set(storey.doors)
+        before = reaches(storey.doors)
         spots = [s for s in boundary.get(want, ()) if s not in taken]
         if not spots:
-            continue
-        # The nearest one, so a front door stays on the front of the house.
-        spot = min(spots, key=lambda s: (abs(s[0] - x) + abs(s[1] - y), s))
-        taken.discard((x, y, d))
-        taken.add(spot)
-        storey.doors[i] = spot
-        moved += 1
+            # That boundary is corners end to end. The room still has to open
+            # onto something, so any clean wall it shares with a neighbour
+            # will do - as long as the door keeps its job. A wall between the
+            # same two dwellings only: move a flat's front door onto an inside
+            # wall and the flat has no front door, move it onto the corridor
+            # somewhere else and the flat it lands on has two.
+            mine = {r for r in want if r}
+            role = homes(want)
+            spots = [s for pair, places in boundary.items()
+                     if joinable(pair) and mine & set(pair) and homes(pair) == role
+                     for s in places if s not in taken]
+        # The nearest first, so a front door stays on the front of the house.
+        spots.sort(key=lambda s: (abs(s[0] - x) + abs(s[1] - y), s))
+        for spot in spots[:DOOR_SPOTS_TRIED]:
+            trial = list(storey.doors)
+            trial[i] = spot
+            if reaches(trial) >= before:
+                storey.doors[i] = spot
+                moved += 1
+                break
     return moved
 
 
@@ -2284,6 +2347,8 @@ class Building:
 
 STAIR_RUN = 5      # tiles a staircase occupies, from Stairs::bounds
 MANY = 1 << 30     # further than any search goes
+# How many places a door stuck on a corner may be offered before it stays put.
+DOOR_SPOTS_TRIED = 40
 CORE_WIDE = 3      # the shaft is the flight plus a landing beside it
 
 
