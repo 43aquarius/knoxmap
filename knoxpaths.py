@@ -104,6 +104,108 @@ def through_wine(program: Path | str | None = None) -> bool:
     return bool(program) and str(program).lower().endswith(".exe")
 
 
+# --- making the bundled Qt win ------------------------------------------------
+
+# The two ways an ELF binary records where to look for its libraries. They
+# differ in one thing that matters here: DT_RPATH is searched *before*
+# LD_LIBRARY_PATH and DT_RUNPATH *after* it.
+DT_RPATH, DT_RUNPATH, DT_NULL = 15, 29, 0
+
+
+def _force_rpath(path: Path) -> bool:
+    """Turn a binary's DT_RUNPATH into DT_RPATH, in place.
+
+    The Linux compiler travels with the exact Qt it was built against and
+    records that folder - but patchelf writes DT_RUNPATH, which the loader
+    searches after LD_LIBRARY_PATH. Steam, Proton and a few desktops export
+    LD_LIBRARY_PATH with a system Qt on it, that Qt is found first, and Qt
+    aborts before WorldEd runs a line:
+
+        Cannot mix incompatible Qt library (5.15.13) with this library
+        (5.15.3)
+
+    Putting the bundled folder on the front of LD_LIBRARY_PATH is not enough
+    on every machine, and nothing the program does at run time can outrank an
+    entry the loader read before it started. DT_RPATH can, and the change is
+    one word: the tag number, in place, same string, same offsets. glibc
+    ignores DT_RPATH when DT_RUNPATH is also there, so this converts rather
+    than adds.
+
+    Returns whether the file was changed. Anything unexpected is left alone -
+    a compiler that starts is worth more than one this has edited wrongly.
+    """
+    import struct
+
+    try:
+        data = bytearray(path.read_bytes())
+    except OSError:
+        return False
+    # 64-bit little-endian ELF only, which is the only build there is.
+    if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        return False
+    try:
+        e_phoff = struct.unpack_from("<Q", data, 0x20)[0]
+        e_phentsize = struct.unpack_from("<H", data, 0x36)[0]
+        e_phnum = struct.unpack_from("<H", data, 0x38)[0]
+    except struct.error:
+        return False
+    changed = False
+    for i in range(e_phnum):
+        head = e_phoff + i * e_phentsize
+        if head + 40 > len(data):
+            return False
+        if struct.unpack_from("<I", data, head)[0] != 2:      # PT_DYNAMIC
+            continue
+        offset, size = struct.unpack_from("<Q", data, head + 8)[0], \
+            struct.unpack_from("<Q", data, head + 32)[0]
+        pos = offset
+        while pos + 16 <= min(offset + size, len(data)):
+            tag = struct.unpack_from("<q", data, pos)[0]
+            if tag == DT_NULL:
+                break
+            if tag == DT_RUNPATH:
+                struct.pack_into("<q", data, pos, DT_RPATH)
+                changed = True
+            pos += 16
+    if not changed:
+        return False
+    try:
+        path.write_bytes(bytes(data))
+    except OSError:
+        return False
+    return True
+
+
+def _carries_qt(folder: str) -> bool:
+    """Whether a folder on LD_LIBRARY_PATH has a Qt 5 of its own in it."""
+    try:
+        return (Path(folder) / "libQt5Core.so.5").exists()
+    except OSError:
+        return False
+
+
+def force_bundled_qt(program: Path | str | None = None) -> int:
+    """Make the compiler and everything it ships with outrank LD_LIBRARY_PATH.
+
+    Returns how many files were changed. Safe to call repeatedly: a file that
+    already records DT_RPATH is left as it is.
+    """
+    if os.name == "nt":
+        return 0
+    if program is None:
+        program = worlded_cli()
+    if not program or through_wine(program):
+        return 0
+    program = Path(program)
+    beside = program.parent
+    files = [program]
+    for folder in (beside / "lib", beside / "plugins"):
+        if _is_dir(folder):
+            files += [p for p in folder.rglob("*") if p.is_file()
+                      and not p.is_symlink()]
+    return sum(1 for f in files if _force_rpath(f))
+
+
 def tool_env(program: Path | str | None = None) -> dict[str, str]:
     """The environment one of the map tools is run in.
 
@@ -138,13 +240,21 @@ def tool_env(program: Path | str | None = None) -> dict[str, str]:
     beside = Path(program).parent
     libs = beside / "lib"
     if _is_dir(libs):
-        already = env.get("LD_LIBRARY_PATH") or ""
-        env["LD_LIBRARY_PATH"] = (f"{libs}{os.pathsep}{already}" if already
-                                  else str(libs))
+        # Ours first, and any folder on the inherited path carrying a Qt of
+        # its own left off altogether. Being merely ahead of Steam's Qt was
+        # not enough on every machine.
+        rest = [p for p in (env.get("LD_LIBRARY_PATH") or "").split(os.pathsep)
+                if p and not _carries_qt(p)]
+        env["LD_LIBRARY_PATH"] = os.pathsep.join([str(libs), *rest])
     plugins = beside / "plugins"
     if _is_dir(plugins / "platforms"):
         env["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(plugins / "platforms")
         env["QT_PLUGIN_PATH"] = str(plugins)
+    else:
+        # None of our own, so an inherited one can only name the system's -
+        # and loading its plugin drags its Qt in behind it.
+        env.pop("QT_PLUGIN_PATH", None)
+        env.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
     env["QT_QPA_PLATFORM"] = os.environ.get("KNOXMAP_QT_PLATFORM", "offscreen")
     return env
 
@@ -198,11 +308,35 @@ def compiler_trouble(timeout: float = 20.0) -> str | None:
     does not recognise: a check that cries wolf about an unfamiliar warning
     is worse than no check.
     """
+    output, fatal = _probe_compiler(timeout)
+    if fatal:
+        return fatal
+    if output is None:
+        return None
+    # A mismatch means the loader reached a Qt that is not ours before it
+    # reached ours, which DT_RPATH settles for good. Done here rather than
+    # only at setup, so a copy installed before this existed heals itself the
+    # first time the window asks whether compiling will work.
+    if QT_MISMATCH.search(output) and force_bundled_qt():
+        output, fatal = _probe_compiler(timeout)
+        if fatal:
+            return fatal
+        if output is None:
+            return None
+    return qt_trouble(output)
+
+
+def _probe_compiler(timeout: float) -> tuple[str | None, str | None]:
+    """(what the compiler said, why it could not be asked at all).
+
+    Output is None when there is nothing to run, or when the program was
+    still going at the end - which means Qt started, and Qt starting is the
+    whole question."""
     import subprocess
 
     program = worlded_cli()
     if not program or os.name == "nt" or through_wine(program):
-        return None          # the Windows build brings its own Qt
+        return None, None    # the Windows build brings its own Qt
     missing = Path(program).parent / "knoxmap-no-such-project.pzw"
     try:
         proc = subprocess.Popen(
@@ -211,7 +345,7 @@ def compiler_trouble(timeout: float = 20.0) -> str | None:
             errors="replace", env=tool_env(program),
             start_new_session=True)
     except OSError as exc:
-        return f"the map compiler at {program} would not start: {exc}"
+        return None, f"the map compiler at {program} would not start: {exc}"
     try:
         output, _ = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -222,8 +356,8 @@ def compiler_trouble(timeout: float = 20.0) -> str | None:
         except (OSError, AttributeError):
             proc.kill()
         proc.communicate(timeout=10)
-        return None
-    return qt_trouble(output)
+        return None, None
+    return output, None
 
 
 def tool_path(path: Path | str) -> str:

@@ -835,6 +835,63 @@ def check_rifle(check, out: str, mod_root: str) -> None:
     check(ok, f"the rifle ships with the map ({len(shipped)} Lua files)")
 
 
+def check_rpath(check) -> None:
+    """The compiler's own Qt outranks whatever LD_LIBRARY_PATH names.
+
+    patchelf writes DT_RUNPATH, which the loader searches *after*
+    LD_LIBRARY_PATH, so Steam's or Proton's Qt was found first and Qt aborted
+    on the spot. DT_RPATH is searched before it, and the change is one word:
+    the tag number, in place.
+    """
+    import struct
+
+    import knoxpaths
+
+    def elf(tag: int) -> bytes:
+        """A 64-bit ELF with one PT_DYNAMIC holding `tag` and DT_NULL."""
+        dyn_at = 128
+        head = bytearray(64)
+        head[0:7] = b"\x7fELF\x02\x01\x01"
+        struct.pack_into("<HHI", head, 0x10, 2, 0x3E, 1)     # EXEC, x86-64
+        struct.pack_into("<Q", head, 0x20, 64)               # e_phoff
+        struct.pack_into("<HH", head, 0x34, 64, 56)          # e_ehsize, phentsize
+        struct.pack_into("<H", head, 0x38, 1)                # e_phnum
+        ph = bytearray(56)
+        struct.pack_into("<I", ph, 0, 2)                     # PT_DYNAMIC
+        struct.pack_into("<Q", ph, 8, dyn_at)                # p_offset
+        struct.pack_into("<Q", ph, 32, 32)                   # p_filesz
+        body = struct.pack("<qQ", tag, 0x40) + struct.pack("<qQ", 0, 0)
+        out = bytearray(dyn_at + 32)
+        out[0:64] = head
+        out[64:120] = ph
+        out[dyn_at:dyn_at + 32] = body
+        return bytes(out)
+
+    def tag_of(raw: bytes) -> int:
+        return struct.unpack_from("<q", raw, 128)[0]
+
+    work = Path(tempfile.mkdtemp(prefix="knoxmap-rpath-"))
+    runpath = work / "runpath.so"
+    runpath.write_bytes(elf(29))                             # DT_RUNPATH
+    size = runpath.stat().st_size
+    check(knoxpaths._force_rpath(runpath) and tag_of(runpath.read_bytes()) == 15,
+          "DT_RUNPATH becomes DT_RPATH, which the loader reads first")
+    check(runpath.stat().st_size == size,
+          "and the file is the same size, because only the tag changed")
+    check(not knoxpaths._force_rpath(runpath),
+          "one that already says DT_RPATH is left alone")
+
+    for name, raw in (("nonsense.so", b"not an ELF at all"),
+                      ("empty.so", b""),
+                      ("32bit.so", b"\x7fELF\x01\x01\x01" + bytes(200))):
+        path = work / name
+        path.write_bytes(raw)
+        before = path.read_bytes()
+        check(not knoxpaths._force_rpath(path) and path.read_bytes() == before,
+              f"and {name} is not touched")
+    shutil.rmtree(work, ignore_errors=True)
+
+
 def check_qt_env(check) -> None:
     """The map compiler is made to find its own Qt, and a Qt that got away
     with it is explained rather than reported as a crash.
@@ -855,8 +912,16 @@ def check_qt_env(check) -> None:
     (binary.parent / "plugins" / "platforms").mkdir(parents=True)
     binary.write_text("", encoding="utf-8")
 
+    # One folder with a Qt of its own, as Steam and Proton put on the path,
+    # and one with something else in it.
+    theirs = Path(work) / "their-qt"
+    theirs.mkdir()
+    (theirs / "libQt5Core.so.5").write_bytes(b"not really Qt")
+    plain = Path(work) / "their-other-libs"
+    plain.mkdir()
+
     was = os.environ.get("LD_LIBRARY_PATH")
-    os.environ["LD_LIBRARY_PATH"] = "/usr/lib/x86_64-linux-gnu"
+    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join([str(theirs), str(plain)])
     try:
         env = knoxpaths.tool_env(binary)
     finally:
@@ -867,8 +932,10 @@ def check_qt_env(check) -> None:
     path = (env.get("LD_LIBRARY_PATH") or "").split(os.pathsep)
     check(windows or (path and path[0] == str(binary.parent / "lib")),
           "the compiler's own Qt goes ahead of the machine's on LD_LIBRARY_PATH")
-    check(windows or "/usr/lib/x86_64-linux-gnu" in path,
+    check(windows or str(plain) in path,
           "and what was already there is kept, not thrown away")
+    check(windows or str(theirs) not in path,
+          "except a folder carrying a Qt of its own, which is left off")
     check(windows or env.get("QT_QPA_PLATFORM_PLUGIN_PATH")
           == str(binary.parent / "plugins" / "platforms"),
           "and its own platform plugins are the ones it is pointed at")
@@ -1740,6 +1807,7 @@ def main(argv: list[str]) -> int:
         check_lots_apart(check, out)
         check_procedural(check, work)
         check_qt_env(check)
+        check_rpath(check)
         check_compile_failures(check, work)
         check_wall_corners(check)
         check_overture(check, work)

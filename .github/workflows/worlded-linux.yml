@@ -114,10 +114,19 @@ jobs:
             done
           done
           # Found beside the program rather than wherever a distro keeps it.
-          patchelf --set-rpath '$ORIGIN/lib' "$out/PZWorldEd_cli"
-          for lib in "$out"/lib/*.so*; do patchelf --set-rpath '$ORIGIN' "$lib"; done
+          # --force-rpath writes DT_RPATH, not DT_RUNPATH. The difference is
+          # the whole problem on Linux: the loader searches DT_RPATH before
+          # LD_LIBRARY_PATH and DT_RUNPATH after it, and Steam, Proton and
+          # several desktops export an LD_LIBRARY_PATH with a system Qt on
+          # it. With RUNPATH that Qt wins, and Qt aborts on the spot with
+          # "Cannot mix incompatible Qt library". With RPATH nothing in the
+          # environment can get in front of the Qt this ships with.
+          patchelf --force-rpath --set-rpath '$ORIGIN/lib' "$out/PZWorldEd_cli"
+          for lib in "$out"/lib/*.so*; do
+            patchelf --force-rpath --set-rpath '$ORIGIN' "$lib"
+          done
           for plugin in "$out"/plugins/platforms/*.so; do
-            patchelf --set-rpath '$ORIGIN/../../lib' "$plugin"
+            patchelf --force-rpath --set-rpath '$ORIGIN/../../lib' "$plugin"
           done
           du -sh "$out"
 
@@ -128,6 +137,24 @@ jobs:
                      grep 'not found' || true)
           [ -z "$missing" ] || { echo "$missing"; exit 1; }
           echo "every library resolves"
+          # And on RPATH, not RUNPATH, or an inherited LD_LIBRARY_PATH gets in
+          # front of the bundled Qt and Qt aborts before WorldEd runs a line.
+          for f in "$out/PZWorldEd_cli" "$out"/lib/*.so* "$out"/plugins/platforms/*.so; do
+            [ -e "$f" ] && [ ! -L "$f" ] || continue
+            if readelf -d "$f" | grep -q 'RUNPATH'; then
+              echo "$f still records RUNPATH"; exit 1
+            fi
+          done
+          echo "every binary records RPATH"
+          # It has to still run with a hostile LD_LIBRARY_PATH in front of it.
+          hostile=$(mktemp -d)
+          cp "$out/lib/libQt5Core.so.5" "$hostile/" 2>/dev/null || true
+          LD_LIBRARY_PATH="$hostile" QT_QPA_PLATFORM=offscreen \
+            timeout 20 "$out/PZWorldEd_cli" --generate-map=/nope.pzw 2>&1 |
+            tee run.log || true
+          grep -q 'Cannot mix incompatible Qt' run.log &&
+            { echo "the bundled Qt lost to LD_LIBRARY_PATH"; exit 1; }
+          echo "it starts with a foreign Qt on LD_LIBRARY_PATH"
 
       - name: It runs
         run: |

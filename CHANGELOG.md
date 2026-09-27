@@ -2,6 +2,23 @@
 
 ## 1.4.3
 
+- **The map compiler now loads its own Qt on Linux, whatever
+  `LD_LIBRARY_PATH` says** (`knoxpaths.py`, `worlded-linux.yml`). The bundled
+  binaries recorded their library folder as DT_RUNPATH, which the loader
+  searches *after* `LD_LIBRARY_PATH` — and Steam, Proton and several desktops
+  export one with a system Qt on it. That Qt was found first and Qt aborted
+  before WorldEd ran a line: *Cannot mix incompatible Qt library (5.15.13)
+  with this library (5.15.3)*. Putting the bundled folder at the front of
+  `LD_LIBRARY_PATH` was not enough, because nothing done at run time outranks
+  what the loader read before starting.
+
+  The tag is now DT_RPATH, which is searched first. Future builds are made
+  that way (`patchelf --force-rpath`); an install that already exists is
+  converted in place the first time it is checked, so it heals itself without
+  a reinstall. A folder on `LD_LIBRARY_PATH` carrying a Qt of its own is also
+  dropped for the compiler, and an inherited `QT_PLUGIN_PATH` is ignored when
+  there are no bundled plugins to point at.
+
 - **Doors no longer sit on a wall corner, where the game draws neither door
   nor wall** (`knoxbuild/layout.py`). A tile carrying both a west and a north
   wall is one corner piece, and a door on one comes out as blank wall — a
