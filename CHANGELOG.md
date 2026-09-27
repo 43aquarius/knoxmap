@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.3.1
+## 1.4.3.2
 
 - **More than one kind of sink** (`knoxbuild/catalog.py`). Every kitchen in a
   town had the same steel double sink and every bathroom the same white
