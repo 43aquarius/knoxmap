@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.2
+
+- **Paper map outlines are checked again after they are rounded to whole
+  tiles** (`knoxbuild/worldmap_bin.py`). Collapsed and self-crossing polygons
+  are repaired where they can be and dropped where they cannot, instead of
+  being written out. They were crashing the world map when it was zoomed out
+  over a dense area. Measured on two built maps: 21 bad outlines and 15 bad
+  outlines, now none.
+
+- **`KnoxMapGunCache.lua` checks an argument's type before calling a method on
+  it.** Stops the repeated "Tried to call nil" in the game's log.
+
 ## 1.4.1
 
 - **KnoxMap.exe is built with MSVC** (`win/build_launcher.ps1`, on a Windows

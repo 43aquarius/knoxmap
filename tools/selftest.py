@@ -1959,6 +1959,48 @@ def main(argv: list[str]) -> int:
             return True
 
         check(buffer_safe(paper), "every outline on the paper map is inside its cell's buffer")
+
+        # Rounding to whole tiles is what makes an outline the game cannot
+        # draw. Reported from a Madrid map: 259 invalid and 39 zero-area
+        # polygons, one of them [(244, 162), (244, 153), (244, 162)].
+        from shapely.geometry import Polygon as _Poly
+
+        from knoxbuild.worldmap_bin import read_bin as _read, write_bin as _write
+        shapes = [("thin", [(244.2, 162.4), (244.4, 153.1), (244.1, 162.2)]),
+                  ("collapse", [(50.1, 50.1), (50.4, 50.2), (50.2, 50.4), (50.3, 50.1)]),
+                  ("bowtie", [(100, 100), (120, 120), (120, 100), (100, 120)]),
+                  ("wide", [(200, 40), (900, 44), (895, 300), (205, 296)]),
+                  ("ok", [(10, 10), (30, 10), (30, 30), (10, 30)])]
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<world version="1.0">',
+                 ' <cell x="0" y="0">']
+        for label, ring in shapes:
+            pts = "".join(f'<point x="{px}" y="{py}"/>' for px, py in ring)
+            lines += ['  <feature>', '   <geometry type="Polygon">',
+                      f'    <coordinates>{pts}</coordinates>', '   </geometry>',
+                      '   <properties>'
+                      f'<property name="building" value="{label}"/></properties>',
+                      '  </feature>']
+        lines += [' </cell>', '</world>']
+        nasty = os.path.join(work, "nasty.xml")
+        with open(nasty, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        _write(nasty, nasty + ".bin")
+        drawn = _read(nasty + ".bin")
+        broken = 0
+        for feats in drawn.values():
+            for _t, rings, _props in feats:
+                if any(len(set(map(tuple, r))) < 3 for r in rings):
+                    broken += 1
+                    continue
+                shape = _Poly(rings[0], rings[1:])
+                if not shape.is_valid or shape.area <= 0:
+                    broken += 1
+        labels = {v for feats in drawn.values() for _t, _r, props in feats
+                  for v in props.values()}
+        check(broken == 0 and {"ok", "wide", "bowtie"} <= labels
+              and "thin" not in labels and "collapse" not in labels,
+              f"a collapsed or crossed outline never reaches the paper map "
+              f"({broken} bad, kept {sorted(labels)})")
         # A cell packed with more outlines than the game can index (it holds
         # each cell's points in one buffer, addressed by a 16-bit number).
         from knoxbuild.worldmap_bin import CELL_POINT_BUDGET, write_bin
