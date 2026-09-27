@@ -1005,6 +1005,35 @@ def check_facing(check) -> None:
           f"and a wall cabinet hangs over a counter, not on a bare wall "
           f"({loose} of {rooms_with} do not)")
 
+    # Every kitchen in a town had the same sink. The extra sets came off the
+    # vanilla map, where each tile's facing was read from the wall it stands
+    # against; a facing copied down wrong would turn a sink to face the room.
+    kinds = _Counter()
+    facing_wrong = 0
+    for i in range(48):
+        w, h = sizes[i % len(sizes)]
+        building = _L.build_building(w, h, levels=1 if i % 3 else 2, seed=i,
+                                     kind=None, commercial=False)
+        for storey in building.storeys:
+            for role, fx, fy, orient in storey.furniture:
+                if "sink" not in role:
+                    continue
+                kinds[role] += 1
+                idx = (storey.grid[fy][fx]
+                       if 0 <= fx < storey.width and 0 <= fy < storey.height else 0)
+                if not idx:
+                    continue
+                walls = {d for d, nx, ny in (("N", fx, fy - 1), ("S", fx, fy + 1),
+                                             ("W", fx - 1, fy), ("E", fx + 1, fy))
+                         if _L._room_at(storey, nx, ny) != idx}
+                if walls and orient not in walls:
+                    facing_wrong += 1
+    check(len(kinds) >= 4,
+          f"a town has more than one kind of sink in it ({len(kinds)})")
+    check(facing_wrong == 0,
+          f"and every one has its back to a wall it has a sprite for "
+          f"({facing_wrong} do not)")
+
 
 def check_qt_env(check) -> None:
     """The map compiler is made to find its own Qt, and a Qt that got away

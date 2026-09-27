@@ -383,6 +383,12 @@ CHOICES = {
                  "wardrobe_tan"],
     "dresser": ["dresser", "dresser_alt", "dresser_black", "dresser_tan"],
     "counter": ["counter"] + [f"counter_{i}" for i in range(1, 8)],
+    # Every kitchen in a town had the same steel double sink and every
+    # bathroom the same white basin, which is what reads as institutional.
+    # Vanilla spreads across nine sets; these are the ones whose facings we
+    # could confirm off the map itself.
+    "sink": ["sink", "sink_cream"],
+    "kitchen_sink": ["kitchen_sink", "kitchen_sink_steel", "kitchen_sink_dark"],
 }
 
 

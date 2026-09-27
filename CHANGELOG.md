@@ -2,6 +2,16 @@
 
 ## 1.4.3.1
 
+- **More than one kind of sink** (`knoxbuild/catalog.py`). Every kitchen in a
+  town had the same steel double sink and every bathroom the same white
+  basin, which is what reads as institutional; the game's own map spreads
+  across nine sets. Three more are added, and the facing of every tile was
+  read off the vanilla map rather than guessed — for each sink standing
+  against exactly one wall of a room, which wall that was. The two sets
+  already here came back exactly as written, which is what makes the rest of
+  it trustworthy. The pedestal basins are left out: they only ever answer
+  north and west, so they have two sprites, not four.
+
 - **Not every room has a picture in it** (`knoxbuild/layout.py`). Pictures and
   mirrors are on nearly every room's list and, unlike everything else, they
   repeat as the list grows with the floor, so almost every room had one or
