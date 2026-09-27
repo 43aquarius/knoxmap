@@ -1,8 +1,8 @@
 name: release
 
-# Push a tag like v1.3.7 and this makes the GitHub release players download:
-# the same checks as every push, then one file per system with that version's
-# CHANGELOG section as the notes.
+# Push a tag like v1.3.7, or publish a release by hand on GitHub, and this
+# makes the download players get: the same checks as every push, then one
+# file per system with that version's CHANGELOG section as the notes.
 #
 # Windows gets a zip, which Explorer opens without anything installed. Linux
 # and macOS get tarballs, because a zip has no executable bit and ./setup.sh
@@ -12,54 +12,123 @@ name: release
 # A fix that only matters on one system is released for that system alone:
 # tag it v1.3.9-mc1 and only the macOS file is built and published, and the
 # other systems stay where they are. v1.3.9 with no suffix is for everyone.
+#
+# A release with no files on it is invisible to the updater - there is
+# nothing for it to download - so 1.4.1, tagged without the v and published
+# by hand, never reached anybody's update menu. Both routes end in the same
+# place now:
+#
+#   - pushing a tag, with the v or without it
+#   - Draft a new release on GitHub, which fires release: published
+#
+# and whichever happens second finds the files already there. A release this
+# workflow creates itself starts no second run: events made with
+# GITHUB_TOKEN never trigger workflows.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "[0-9]*"]
+  release:
+    types: [published]
 
 jobs:
+  # The map compiler is published from this repository too, under tags like
+  # worlded-cli-linux-20260909f, and those are not KnoxMap. This is the rule
+  # updater.VERSION_TAG applies at the other end: a tag is a release of
+  # KnoxMap when it is a version, optionally with a name after it.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      ours: ${{ steps.tag.outputs.ours }}
+    steps:
+      - id: tag
+        env:
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          set -eu
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if printf '%s' "$TAG" | grep -Eq '^v?[0-9]+(\.[0-9]+){0,3}(-[a-z]+[0-9]*)?$'; then
+            echo "ours=yes" >> "$GITHUB_OUTPUT"
+            echo "$TAG is a KnoxMap release"
+          else
+            echo "ours=no" >> "$GITHUB_OUTPUT"
+            echo "$TAG is not a KnoxMap version; nothing to release"
+          fi
+
   checks:
+    needs: gate
+    if: needs.gate.outputs.ours == 'yes'
     uses: ./.github/workflows/checks.yml
 
   # Builds KnoxMap.exe and runs it on a Windows runner before anything is
   # published: the launcher cannot be tested on the machine it is written on.
   launcher:
+    needs: gate
+    if: needs.gate.outputs.ours == 'yes'
     uses: ./.github/workflows/launcher.yml
 
   release:
-    needs: [checks, launcher]
+    needs: [gate, checks, launcher]
+    if: needs.gate.outputs.ours == 'yes'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ needs.gate.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.tag }}
 
       - uses: actions/download-artifact@v4
         with:
           name: KnoxMap-exe
 
-      - name: Which systems this release is for
+      - name: Which version, and which systems it is for
         id: which
         run: |
           set -eu
-          v="${GITHUB_REF_NAME}"
+          # The tag may carry the v or not. The files always do, because the
+          # updater looks for KnoxMap-v<version>-<system>.
+          version="${TAG#v}"
           # A suffix that names a system means that system alone. Any other
           # suffix is just a name for the release - v1.3.9-rnd was the
           # pictures - and goes out to everybody, same as a bare version.
-          case "${v##*-}" in
+          case "${TAG##*-}" in
             mac*|mc*)     systems=macos ;;
             win*|w[0-9]*) systems=windows ;;
             lin*|l[0-9]*) systems=linux ;;
             *)            systems="windows linux macos" ;;
           esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "systems=$systems" >> "$GITHUB_OUTPUT"
-          echo "$v is for: $systems"
+          echo "$TAG is KnoxMap $version for: $systems"
+
+      - name: The changelog is on this version
+        env:
+          VERSION: ${{ steps.which.outputs.version }}
+        run: |
+          set -eu
+          # knoxlog.version() reports the first "## " heading in the changelog
+          # and nothing else, and the updater compares that with the tag. Ship
+          # a version the changelog has never heard of and the copy that
+          # installs it keeps calling itself the older one, so it downloads the
+          # same update on every check for ever. 1.4.1 was tagged that way.
+          want="$(printf '%s' "$VERSION" | sed 's/-\([a-z]\)/ \1/')"
+          top="$(awk '/^## /{sub(/^## +/, ""); sub(/ +$/, ""); print; exit}' CHANGELOG.md)"
+          if [ "$top" != "$want" ]; then
+            echo "CHANGELOG.md starts at '$top', but this tag is '$want'."
+            echo "Put a '## $want' section at the top of CHANGELOG.md and tag again."
+            exit 1
+          fi
 
       - name: Pack one release per system
         env:
           SYSTEMS: ${{ steps.which.outputs.systems }}
+          VERSION: ${{ steps.which.outputs.version }}
         run: |
           set -eu
-          v="${GITHUB_REF_NAME}"
+          v="v$VERSION"
           # git archive honours .gitattributes export-ignore and keeps the
           # executable bit that setup.sh and knoxmap.sh carry in the index.
           git archive --format=tar --prefix=KnoxMap/ -o base.tar HEAD
@@ -91,12 +160,13 @@ jobs:
       - name: Notes from CHANGELOG.md
         env:
           SYSTEMS: ${{ steps.which.outputs.systems }}
+          VERSION: ${{ steps.which.outputs.version }}
         run: |
           set -eu
+          v="v$VERSION"
           # The tag spells a one-system release with a dash, the changelog
           # heading with a space: v1.3.9-mc1 is "## 1.3.9 mc1".
-          version="${GITHUB_REF_NAME#v}"
-          version="$(printf '%s' "$version" | sed 's/-\([a-z]\)/ \1/')"
+          version="$(printf '%s' "$VERSION" | sed 's/-\([a-z]\)/ \1/')"
           awk -v v="$version" '
             /^## / { on = (index($0, "## " v " ") == 1 || $0 == "## " v) ; next }
             on' CHANGELOG.md > notes.md
@@ -112,9 +182,9 @@ jobs:
             printf '| System | Download | Then |\n|---|---|---|\n'
             for system in $SYSTEMS; do
               case "$system" in
-                windows) printf '| Windows 10/11 | `KnoxMap-%s-windows.zip` | unzip it and double-click `KnoxMap.exe` |\n' "$GITHUB_REF_NAME" ;;
-                linux)   printf '| Linux | `KnoxMap-%s-linux.tar.gz` | `tar -xzf` it, then `./setup.sh` and `./knoxmap.sh` |\n' "$GITHUB_REF_NAME" ;;
-                macos)   printf '| macOS | `KnoxMap-%s-macos.tar.gz` | `tar -xzf` it, then `./setup.sh` and `./knoxmap.sh` |\n' "$GITHUB_REF_NAME" ;;
+                windows) printf '| Windows 10/11 | `KnoxMap-%s-windows.zip` | unzip it and double-click `KnoxMap.exe` |\n' "$v" ;;
+                linux)   printf '| Linux | `KnoxMap-%s-linux.tar.gz` | `tar -xzf` it, then `./setup.sh` and `./knoxmap.sh` |\n' "$v" ;;
+                macos)   printf '| macOS | `KnoxMap-%s-macos.tar.gz` | `tar -xzf` it, then `./setup.sh` and `./knoxmap.sh` |\n' "$v" ;;
               esac
             done
             printf '\nLinux and macOS need 64-bit Python 3.10+ of your own; see LINUX.md.\n'
@@ -128,9 +198,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SYSTEMS: ${{ steps.which.outputs.systems }}
+          VERSION: ${{ steps.which.outputs.version }}
         run: |
           set -eu
-          v="${GITHUB_REF_NAME}"
+          v="v$VERSION"
           files=""
           for system in $SYSTEMS; do
             case "$system" in
@@ -145,5 +216,20 @@ jobs:
             *' '*) latest=--latest ;;
             *)     latest=--latest=false ;;
           esac
-          title="KnoxMap $(printf '%s' "${v#v}" | sed 's/-\([a-z]\)/ \1/')"
-          gh release create "$v" $files --title "$title" --notes-file notes.md "$latest"
+          title="KnoxMap $(printf '%s' "$VERSION" | sed 's/-\([a-z]\)/ \1/')"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Published by hand: the release page is already there and the
+            # files are not, which is exactly what the updater cannot see.
+            # Notes somebody wrote themselves are left alone; an empty one
+            # gets the changelog.
+            gh release upload "$TAG" $files --clobber
+            body="$(gh release view "$TAG" --json body -q .body)"
+            if [ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+              gh release edit "$TAG" --title "$title" --notes-file notes.md
+            fi
+            gh release edit "$TAG" "$latest"
+          else
+            gh release create "$TAG" $files --title "$title" --notes-file notes.md "$latest"
+          fi
+          echo "on the release now:"
+          gh release view "$TAG" --json assets -q '.assets[].name'

@@ -1,24 +1,45 @@
 # Changelog
 
+## 1.4.1
+
+- **KnoxMap.exe is built with MSVC** (`win/build_launcher.ps1`, on a Windows
+  runner) instead of mingw-w64, and is no longer stripped. Drops the two
+  things antivirus scores a 30 KB two-`CreateProcessW` binary on: the mingw
+  toolchain and a missing symbol table. `win/build_launcher.sh` still builds
+  the identical binary with mingw on Linux and CI still checks it, so what
+  ships is reproducible without Visual Studio. Not a substitute for signing.
+  v1.4's zip shipped the mingw build; this is the first release with the
+  MSVC one.
+
+- **PZWorldEd runs on a Windows desktop of its own** (`CreateDesktopW`,
+  `STARTUPINFOW.lpDesktop`, in `tools/compile_map.py`). Qt's windows and the
+  Generate Lots dialogs cannot be composited onto the screen at all, so
+  compiling no longer flashes windows over whatever is in front. A watcher
+  thread copies anything titled error, warning or exception - and anything
+  still open after a minute - back to the real desktop as a message box, so
+  a compiler that is genuinely stuck is still visible.
+
+- **Setup.bat fetches Python with `curl`, `certutil` and `tar`** instead of a
+  PowerShell one-liner. Same URL, same SHA-256 check, same private copy under
+  `.python`. Kaspersky flagged the PowerShell form; these are stock Windows
+  tools and are not flagged.
+
+- **Added `<game>/projectzomboid/media` to the game folder search**
+  (`knoxpaths.py`). Linux installs that nest the media folder a level deeper
+  were refused as "no game found". Checked in `tools/selftest.py`.
+
+- **Removed `btn-small` from the pipeline Stop buttons**, which sat shorter
+  than the Build and Compile buttons beside them.
+
+- **Releases publish from a tag with or without the `v`, and from a release
+  drafted by hand on GitHub** (`release: published`). `1.4.1` was tagged
+  without the `v`, so `release.yml` never ran, the release carried no files,
+  and a release with no files is invisible to the in-app updater - there is
+  nothing for it to download. `release.yml` now also refuses a tag the
+  changelog does not head, because the app reads its version from that
+  heading and would otherwise offer the same update for ever.
+
 ## 1.4
-
-- **KnoxMap.exe is built the way Windows software is built.** The launcher is
-  a small binary whose whole job is to start Setup once and then the window -
-  two `CreateProcessW` calls and nothing else. That is structurally what a
-  dropper is, and it was built with mingw-w64, whose output is heavily
-  over-represented in the corpora antivirus heuristics are trained on. The
-  same source now compiles with MSVC on a Windows runner, which is what the
-  rest of Windows software is compiled with, and it is no longer stripped: a
-  tiny binary with every symbol taken out of it reads as something with
-  something to hide, and 30 KB was not worth that.
-
-  `win/build_launcher.sh` still builds the identical launcher with mingw-w64
-  on Linux, and CI still checks that it does, so what ships can be reproduced
-  without Visual Studio.
-
-  None of this is a substitute for a code signing certificate, which is the
-  only real answer to "Windows protected your PC" - but it is free, and it
-  stops the file looking like the thing it is not.
 
 - **The size limits are advice now, not a wall.** Draw too big an area and
   KnoxMap used to grey the **Generate map** button out and answer the request

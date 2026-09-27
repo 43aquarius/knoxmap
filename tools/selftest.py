@@ -552,6 +552,15 @@ def check_portable(check) -> None:
           and not updater._is_knoxmap({"tag_name": "v1.4.0", "draft": True}),
           "a released version of KnoxMap is, and a draft or a pre-release is not")
 
+    # 1.4.1 was tagged without the v, so release.yml - which listened for
+    # "v*" alone - never ran, and the release went out with no files on it.
+    # Both ends of that are worth holding down.
+    check(updater._is_knoxmap({"tag_name": "1.4.1"}),
+          "a tag with no v in front of it is still a KnoxMap release")
+    check(not updater._for_this_system({"tag_name": "v9.9", "assets": []})
+          and updater._for_this_system(dict(three, tag_name="v9.9")),
+          "and a release with nothing on it to download is not an update")
+
     # A release can be named on top of a version - "1.3.9 mc1" was the macOS
     # fix, "1.3.9 rnd" the pictures - and has to come out newer than the
     # version it sits on, or nobody is ever offered it.
@@ -569,6 +578,16 @@ def check_portable(check) -> None:
 
     # The launchers must keep LF, or /bin/sh chokes on the carriage returns.
     root = Path(__file__).resolve().parent.parent
+    flow = root / ".github" / "workflows" / "release.yml"
+    if flow.exists():
+        # Whichever way a release is made - pushing the tag or drafting the
+        # release on GitHub - the files have to get built, or the updater has
+        # nothing to offer.
+        text = flow.read_text(encoding="utf-8")
+        check('tags: ["v*", "[0-9]*"]' in text and "types: [published]" in text,
+              "release.yml builds for a tag either way, and for a release "
+              "drafted by hand")
+
     for name in ("setup.sh", "knoxmap.sh"):
         path = root / name
         if path.exists():
