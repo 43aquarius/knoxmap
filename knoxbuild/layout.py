@@ -1398,6 +1398,16 @@ DEFAULT_SHELVING = ("shelf", "bookshelf")
 # are the one thing you can walk over.
 CORE_WALL_ART = ("painting", "mirror", "painting", "corkboard")
 CORE_FACADE_SHARE = 4
+# One piece of art per this many wall slots. Hanging one on every slot filled
+# a corridor edge to edge and made pictures the commonest thing in a house.
+CORE_ART_EVERY = 3
+# Pictures and mirrors a room may hold, however long its wishlist, and how
+# often a room gets one at all. They repeat where other things do not and
+# they are on nearly every room's list, so almost every room had one or two
+# and wall art came to 11.8% of everything in a house. Not every room in a
+# house has a picture in it.
+WALL_ART_CAP = 1
+WALL_ART_CHANCE = 0.55
 CORE_RUGS = ("rug_wide", "rug", "rug_small")
 CORE_RUG_EVERY = 3
 
@@ -2173,7 +2183,10 @@ def _furnish(plan: Plan, rng: random.Random,
             # the windows are laid out last and in columns: a picture on a
             # bay takes it and leaves a hole up the front of the building.
             hung = 0
-            for slot in inside + facade[:max(1, len(facade) // CORE_FACADE_SHARE)]:
+            for n, slot in enumerate(
+                    inside + facade[:max(1, len(facade) // CORE_FACADE_SHARE)]):
+                if n % CORE_ART_EVERY:
+                    continue
                 if hang(CORE_WALL_ART[hung % len(CORE_WALL_ART)], *slot):
                     hung += 1
             laid = 0
@@ -2245,10 +2258,18 @@ def _furnish(plan: Plan, rng: random.Random,
         if eatery or commercial_kitchen or r.kind == "theatre":
             target = len(base)       # fitted out; nothing more to scatter
         wishlist = []
+        art = 0 if rng.random() < WALL_ART_CHANCE else WALL_ART_CAP
         for i in range(target):
             role = base[i % len(base)]
             if i >= len(base) and _once(role):
                 continue
+            # Pictures and mirrors are the one thing that repeats freely, so
+            # scaling the list with floor area turned a big room into a
+            # gallery. Everything else keeps its share.
+            if role in ("painting", "mirror") or role.startswith(("erika_art", "erika_ad")):
+                if art >= WALL_ART_CAP:
+                    continue
+                art += 1
             wishlist.append(role)
         # The middle first, with an aisle round it the wall pieces must leave
         # free; placed after them, it almost never found room.

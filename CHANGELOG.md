@@ -2,6 +2,14 @@
 
 ## 1.4.3.1
 
+- **Not every room has a picture in it** (`knoxbuild/layout.py`). Pictures and
+  mirrors are on nearly every room's list and, unlike everything else, they
+  repeat as the list grows with the floor, so almost every room had one or
+  two and wall art came to 11.8% of everything in a house. One per room at
+  most, and only about half of rooms get one: 1.25 per room down to 0.60,
+  6.6% of the furniture. Corridors hang one every third wall slot rather
+  than on every one.
+
 - **Furniture no longer faces the wrong way** (`knoxbuild/layout.py`). A piece
   with only north and west sprites, stood against a south or east wall, is
   drawn with its north sprite on the far edge of the tile: a corkboard hangs
