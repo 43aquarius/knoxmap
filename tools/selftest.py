@@ -2132,6 +2132,38 @@ def main(argv: list[str]) -> int:
         with contextlib.redirect_stdout(io.StringIO()):
             mod_root, cells, extras = package(out, "Selftest: Town", "selftest", mods_dir=mods)
         check(os.path.exists(os.path.join(mod_root, "ATTRIBUTION.txt")), "ATTRIBUTION.txt in the mod")
+        # A server needs three things the mod folder cannot tell it: the mod
+        # id, the map folder ahead of the vanilla one, and a spawn region
+        # naming this map's spawnpoints. And the warning that matters most -
+        # a world keeps the cells it has already made, so a map added to one
+        # that exists fails in ways nobody can trace back.
+        from make_map_mod import folder_name
+        map_folder = folder_name("Selftest: Town", "selftest")
+        setup = os.path.join(mod_root, "SERVER SETUP.txt")
+        regions = os.path.join(mod_root, "server",
+                               f"{map_folder}_spawnregions.lua")
+        said = open(setup, encoding="utf-8").read() if os.path.exists(setup) else ""
+        lua = open(regions, encoding="utf-8").read() if os.path.exists(regions) else ""
+        check(f"Mods=selftest" in said and f"Map={map_folder};Muldraugh, KY" in said,
+              "the server's Mods= and Map= lines are written out with real names")
+        check("BEFORE anyone joins" in said and "new world" in said,
+              "and it says to add the map before the world exists")
+        check("function SpawnRegions()" in lua
+              and f'media/maps/{map_folder}/spawnpoints.lua' in lua
+              and "Muldraugh, KY" in lua,
+              "a spawn region file is written, this map's and the vanilla one")
+        try:
+            import lupa
+            lupa.LuaRuntime().compile(lua)
+            check(True, "and it is Lua the game can read")
+        except ImportError:
+            pass
+        except Exception as exc:    # noqa: BLE001
+            check(False, f"and it is Lua the game can read ({exc})")
+        play = open(os.path.join(mod_root, "HOW TO PLAY.txt"), encoding="utf-8").read()
+        check("before you start the world" in play.lower()
+              and "SERVER SETUP.txt" in play,
+              "and a single player is told the same, and where the server notes are")
         info = open(os.path.join(mod_root, "mod.info"), encoding="utf-8").read()
         check("OpenStreetMap" in info, "OpenStreetMap credit in the mod description")
         check("require=" not in info, "a map without mod tiles requires no mods")

@@ -40,6 +40,27 @@ def knoxpaths_module():
     return knoxpaths
 
 
+def worlds_already_made() -> list[str]:
+    """Saves that exist on this PC, newest first.
+
+    A world is written to disk cell by cell as players walk into it, built
+    from whatever map was loaded at the time, so a map added or changed
+    afterwards leaves old cells beside new ones that do not match. There is
+    no repair; the answer is a new world. Worth saying at the moment the map
+    is installed, while there is still a choice about which save to start.
+    """
+    try:
+        root = knoxpaths_module().zomboid_user_dir() / "Saves"
+        if not root.is_dir():
+            return []
+        found = [(save.stat().st_mtime, f"{mode.name}/{save.name}")
+                 for mode in root.iterdir() if mode.is_dir()
+                 for save in mode.iterdir() if save.is_dir()]
+    except OSError:
+        return []
+    return [name for _when, name in sorted(found, reverse=True)]
+
+
 def collect(project_dir: str, lots_dir: str) -> tuple[list[str], list[str]]:
     """Compiled cell files, and the loose Lua/XML files WorldEd wrote."""
     cells = []
@@ -478,6 +499,81 @@ KnoxMap is not made, endorsed or supported by The Indie Stone.
 BIG_MAP_CELLS = 40
 
 
+def write_server_setup(mod_root: str, mod_id: str, name: str,
+                       map_folder: str) -> str:
+    """The files and lines a dedicated server needs, ready to copy.
+
+    A map mod is enough for a player on their own; a server needs three more
+    things, and none of them is guessable from the mod folder: the mod id in
+    Mods=, the map folder in Map= ahead of the vanilla one, and a spawn
+    region file naming the map's own spawnpoints.lua. Writing them out with
+    this map's real names is the difference between five minutes and an
+    evening on a wiki.
+    """
+    server = os.path.join(mod_root, "server")
+    os.makedirs(server, exist_ok=True)
+    regions = f"{map_folder}_spawnregions.lua"
+    with open(os.path.join(server, regions), "w", encoding="utf-8") as f:
+        f.write("-- Copy this into Zomboid/Server/ and rename the file to\n"
+                "-- <your server name>_spawnregions.lua - the name has to match\n"
+                "-- the server, not the map.\n"
+                "function SpawnRegions()\n"
+                "    return {\n"
+                f'        {{ name = "{name}", '
+                f'file = "media/maps/{map_folder}/spawnpoints.lua" }},\n'
+                '        { name = "Muldraugh, KY", '
+                'file = "media/maps/Muldraugh, KY/spawnpoints.lua" },\n'
+                "    }\n"
+                "end\n")
+    heading = f"{name} on a dedicated server"
+    lines = [
+        heading,
+        "=" * len(heading),
+        "",
+        "Do this BEFORE anyone joins. A Project Zomboid world is written to",
+        "disk cell by cell as players walk into it, and those cells are built",
+        "from whatever map was loaded at the time. Add or change a map on a",
+        "world that already exists and the old cells stay as they were, next",
+        "to new ones that do not match them. There is no repair for that -",
+        "the answer is always a new world.",
+        "",
+        "1. Copy the folder holding this file into the server's mods folder,",
+        "   the same place a player's mods go.",
+        "",
+        "2. In your server's .ini (Zomboid/Server/<name>.ini), set:",
+        "",
+        f"      Mods={mod_id}",
+        f"      Map={map_folder};Muldraugh, KY",
+        "",
+        "   Keep Muldraugh, KY at the end: the game reads the vanilla lot",
+        "   definitions from it, and this map inherits them.",
+        "   If either line already has entries, add to them with a semicolon",
+        "   between - do not replace what is there.",
+        "",
+        f"3. Copy server/{regions} into Zomboid/Server/ and rename it to",
+        "   <your server name>_spawnregions.lua, matching the .ini's name.",
+        "   Without it players spawn in Muldraugh, not here.",
+        "",
+        "4. Delete the old save if the server has run before:",
+        "   Zomboid/Saves/Multiplayer/<your server name>.",
+        "",
+        "5. Start the server.",
+        "",
+        "Changing the map later",
+        "----------------------",
+        "Rebuild it, copy the mod over, and start a new world. Keeping the old",
+        "save is what causes the random failures people report - chunks that",
+        "were generated from the previous version of the map do not agree",
+        "with the new one, and the mismatch surfaces hours later as buildings",
+        "half-written, players falling through floors, or the server dying on",
+        "a cell it cannot read.",
+    ]
+    path = os.path.join(mod_root, "SERVER SETUP.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return regions
+
+
 def write_how_to_play(mod_root: str, name: str, cells: int, big: bool) -> None:
     """A short note beside the mod: how to turn it on, and what a big map
     needs from the game."""
@@ -498,6 +594,18 @@ def write_how_to_play(mod_root: str, name: str, cells: int, big: bool) -> None:
         "-----------",
         "Right-click the ground for \"Reset loot\" to refill the containers in a",
         "building, or everything within 30 tiles, without starting a new save.",
+        "",
+        "Add it before you start the world",
+        "---------------------------------",
+        "Turn the mod on first, then make the save. Project Zomboid writes the",
+        "world to disk cell by cell as you walk into it, from whatever map was",
+        "loaded at the time, so a map added or changed partway through leaves",
+        "old cells sitting next to new ones that do not match. That shows up",
+        "later as odd failures rather than a clear error, and the only fix is",
+        "a new save. The same goes for rebuilding this map: rebuild, reinstall,",
+        "start a new world.",
+        "",
+        "On a server, see SERVER SETUP.txt beside this file.",
     ]
     if big:
         lines += [
@@ -651,6 +759,8 @@ def package(project_dir: str, name: str, mod_id: str,
     n_cells = sum(1 for c in cells if c.endswith(".lotheader"))
     big_map = n_cells >= BIG_MAP_CELLS
     write_how_to_play(mod_root, name, n_cells, big_map)
+    regions = write_server_setup(mod_root, mod_id, name,
+                                 folder_name(name, mod_id))
     n_pois = write_spawn_selector(project_dir, mod_root, mod_id, name)
     reset_loot = write_reset_loot(mod_root)
     gun_cache = write_gun_cache(project_dir, mod_root, mod_id)
@@ -663,6 +773,14 @@ def package(project_dir: str, name: str, mod_id: str,
         extra_names.append(f"objects.lua ({zone_counts.get('ParkingStall', 0)} parking stalls, "
                            f"{zone_counts.get('TownZone', 0)} town zones)")
     extra_names.append(f"Spawn Selector support ({n_pois} places)")
+    extra_names.append(f"SERVER SETUP.txt and server/{regions}")
+    saves = worlds_already_made()
+    if saves:
+        extra_names.append(
+            f"NOTE: {len(saves)} save(s) already on this PC "
+            f"(newest: {saves[0]}). Start a NEW world for this map - a world "
+            f"keeps the cells it has already generated, and they will not "
+            f"match a map added or changed after it was made.")
     if reset_loot:
         extra_names.append("Reset loot menu")
     if gun_cache:

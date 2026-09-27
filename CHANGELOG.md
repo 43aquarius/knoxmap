@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.3
+
+- **Every map now ships what a dedicated server needs**
+  (`tools/make_map_mod.py`). A map mod is enough for one player; a server
+  needs three things the mod folder cannot tell it, so they are written out
+  with this map's real names: `SERVER SETUP.txt` with the exact `Mods=` and
+  `Map=` lines, and `server/<map>_spawnregions.lua` ready to copy into
+  `Zomboid/Server/`. Without the spawn region players start in Muldraugh
+  rather than on the map.
+
+- **Both notes say to add the map before the world exists.** A world is
+  written cell by cell as players walk into it, from whatever map was loaded
+  at the time, so a map added or changed afterwards leaves old cells beside
+  new ones that do not match — which surfaces later as unexplained failures
+  rather than an error. Installing now also reports the saves already on the
+  PC, so the choice is in front of you at the moment it matters.
+
 ## 1.4.2
 
 - **The map compiler uses its own Qt plugins on Linux, not the machine's**
