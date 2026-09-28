@@ -2,6 +2,26 @@
 
 ## 1.4.3.4
 
+- **Bathrooms the size of bathrooms** (`knoxbuild/layout.py`). A floor is cut
+  into rooms of one target size and the bathroom then takes the smallest of
+  them, so it came out at 13.7 m² — a bathroom the size of a bedroom, and the
+  reason bathrooms measured 7.4 pieces per 10 m² against Knox County's 12.6.
+  One region on a house floor now gives up a corner to a small room first, in
+  two cuts because a corner taken out of a rectangle leaves an L. Bathrooms
+  13.1 m² down to 10.0 with the same fittings in them; what is left of the
+  corner is a closet or a box room, which is what sits beside a bathroom in
+  the game's houses too. The smallest room a wall can enclose is 3×3, so 9 m²
+  is as near the game's 6.5 as whole tiles allow.
+
+- **A table and chairs in the kitchen** (`knoxbuild/layout.py`). Every piece
+  of a centre group needs its own clear block with a tile of aisle all round
+  it, so in a kitchen four tiles across nothing but the bare table ever fitted:
+  one kitchen in eight had a table and there were 0.17 chairs in one, against
+  the game's 0.52 and 1.10. A table on its own is the last arrangement tried,
+  and chairs go on after the group is down, tucked against the table rather
+  than given an aisle each. Tables in 36% of kitchens, 0.70 chairs each, and a
+  mat under the table where there is room for one.
+
 - **A light by the front door** (`knoxbuild/yards.py`). Knox County hangs one
   outside 92% of its houses; generated ones had 1%, which is most of why a
   street of them reads as unfinished from outside. One goes on the wall beside

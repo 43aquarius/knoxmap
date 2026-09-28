@@ -105,6 +105,10 @@ ROOM_STYLE = {
     "livingroom": (C.FLOOR_CARPET_RED, "Living Room",
                    ["sofa", "armchair", "tv", "sidetable", "bookshelf", "lamp",
                     "painting", "plant", "armchair", "shelf", "lamp", "shag_rug"]),
+    # Nothing here that wants a wall: the counters fill whatever wall the
+    # wishlist leaves, and Knox County's kitchens carry as much counter as
+    # ours do. What ours were short of - a table, chairs, a mat - stands in
+    # the middle, so it is in the centre group rather than on this list.
     "kitchen": (C.FLOOR_TILE_CHECK, "Kitchen",
                 ["fridge", "stove", "kitchen_sink", "counter", "counter", "counter",
                  "washer", "shelf", "plant"]),
@@ -332,22 +336,73 @@ SPECIAL_MIXES = {
 }
 
 
+# A bathroom in Knox County is 6.5 m2. Ours were 13.7 - a bathroom the size of
+# a bedroom - because a floor is cut to one target area and the bathroom then
+# takes the smallest of the ordinary rooms, there being no small one. One
+# region per house floor gives up a corner to a bathroom-sized room first.
+# MIN_ROOM is 3, so 9 to 12 tiles is as near the game's as squares allow.
+SMALL_ROOM_RUN = (MIN_ROOM, MIN_ROOM + 1)
+
+
+def _inside(x0: int, y0: int, x1: int, y1: int,
+            mask: list[list[bool]] | None) -> int:
+    """Tiles of a rectangle that are really inside the building.
+
+    On a footprint turned 38 degrees half of every bounding rectangle is empty
+    corner, and sizing rooms by the rectangle kept splitting until a house had
+    fifteen rooms a floor, most of them offices and storerooms.
+    """
+    if mask is None:
+        return (x1 - x0 + 1) * (y1 - y0 + 1)
+    return sum(1 for y in range(y0, y1 + 1) for x in range(x0, x1 + 1) if mask[y][x])
+
+
 def _split(x0: int, y0: int, x1: int, y1: int, rng: random.Random,
            depth: int, out: list[Room],
            target_area: int = TARGET_ROOM_AREA,
-           mask: list[list[bool]] | None = None) -> None:
+           mask: list[list[bool]] | None = None,
+           small: list[bool] | None = None) -> None:
     w, h = x1 - x0 + 1, y1 - y0 + 1
     can_v = w >= MIN_SPLIT
     can_h = h >= MIN_SPLIT
-    # Measure the floor that is actually inside the building. On a footprint
-    # turned 38 degrees half of every bounding rectangle is empty corner, and
-    # sizing rooms by the rectangle kept splitting until a house had fifteen
-    # rooms a floor, most of them offices and storerooms.
-    area = w * h if mask is None else sum(
-        1 for y in range(y0, y1 + 1) for x in range(x0, x1 + 1) if mask[y][x])
+    area = _inside(x0, y0, x1, y1, mask)
     if depth <= 0 or not (can_v or can_h) or area <= target_area:
         out.append(Room(x0, y0, x1, y1))
         return
+
+    # The one small room. A corner taken out of a rectangle leaves an L and
+    # the plan is rectangles, so it takes two cuts: a strip the minimum depth
+    # off one end, and the room off one end of the strip. What is left of the
+    # strip is a closet or a box room, which is what sits beside a bathroom in
+    # the game's houses too.
+    if small and small[0] and w >= MIN_ROOM * 2 and h >= MIN_ROOM * 2 \
+            and area >= target_area * 2:
+        wide = w >= h
+        length = w if wide else h
+        run = rng.randint(SMALL_ROOM_RUN[0],
+                          min(SMALL_ROOM_RUN[1], length - MIN_ROOM))
+        far_end = rng.random() < 0.5        # which end of the region the strip is
+        far_side = rng.random() < 0.5       # which end of the strip the room is
+        if wide:
+            sy0, sy1 = ((y1 - MIN_ROOM + 1, y1) if far_end else (y0, y0 + MIN_ROOM - 1))
+            bx0, bx1 = ((x1 - run + 1, x1) if far_side else (x0, x0 + run - 1))
+            room = (bx0, sy0, bx1, sy1)
+            strip = ((x0, sy0, bx0 - 1, sy1) if far_side else (bx1 + 1, sy0, x1, sy1))
+            rest = (x0, y0, x1, y1 - MIN_ROOM) if far_end else (x0, y0 + MIN_ROOM, x1, y1)
+        else:
+            sx0, sx1 = ((x1 - MIN_ROOM + 1, x1) if far_end else (x0, x0 + MIN_ROOM - 1))
+            by0, by1 = ((y1 - run + 1, y1) if far_side else (y0, y0 + run - 1))
+            room = (sx0, by0, sx1, by1)
+            strip = ((sx0, y0, sx1, by0 - 1) if far_side else (sx0, by1 + 1, sx1, y1))
+            rest = (x0, y0, x1 - MIN_ROOM, y1) if far_end else (x0 + MIN_ROOM, y0, x1, y1)
+        # Not where the footprint has cut most of it away: a room of three
+        # tiles in the corner of a turned building is not a bathroom.
+        if _inside(*room, mask) >= MIN_ROOM * MIN_ROOM - 2:
+            small[0] = False
+            out.append(Room(*room))
+            _split(*strip, rng, depth - 1, out, target_area, mask)
+            _split(*rest, rng, depth - 1, out, target_area, mask)
+            return
     if not can_h:
         vertical = True
     elif not can_v:
@@ -1943,8 +1998,10 @@ CENTRE_GROUPS: dict[str, tuple[list[tuple[str, int, int, str]], int]] = {
     "dining": ([("rug_wide", 0, 0, "W"), ("dining_table", 1, 1, "W"),
                 ("chair", 0, 1, "W"), ("chair", 3, 1, "E"),
                 ("chair", 1, 0, "N"), ("chair", 2, 2, "S")], 1),
-    "kitchen": ([("round_table", 1, 0, "W"), ("chair", 0, 0, "W"),
-                 ("chair", 2, 0, "E")], 1),
+    # A mat under the table. Rugs lie on their own layer and block nothing, so
+    # it costs the group a row of clearance and nothing else.
+    "kitchen": ([("rug_small", 0, 0, "W"), ("round_table", 1, 0, "W"),
+                 ("chair", 0, 0, "W"), ("chair", 2, 0, "E")], 1),
     "bedroom": ([("rug_small", 0, 0, "W")], 1),
     "office": ([("dining_table", 0, 1, "W"), ("chair", 0, 0, "N")], 3),
     "library": ([("dining_table", 1, 1, "W"), ("chair", 0, 1, "W"),
@@ -1973,7 +2030,13 @@ FALLBACK_GROUPS: dict[str, list[list[tuple[str, int, int, str]]]] = {
                    [("rug_small", 0, 0, "W"), ("coffee_table", 0, 0, "N")]],
     "dining": [[("dining_table", 1, 0, "W"), ("chair", 0, 0, "W"), ("chair", 3, 0, "E")],
                [("round_table", 1, 0, "W"), ("chair", 0, 0, "W"), ("chair", 2, 0, "E")]],
-    "kitchen": [[("round_table", 0, 0, "W"), ("chair", 1, 0, "E")]],
+    # Half the game's kitchens have a table in them and one in eight of ours
+    # did: the group and its aisle want a five-by-three clear block, and a
+    # kitchen four tiles across with two doors in it has nowhere to put one.
+    # A table on its own is the last thing tried, as it is what a kitchen too
+    # small to eat in still has.
+    "kitchen": [[("round_table", 0, 0, "W"), ("chair", 1, 0, "E")],
+                [("round_table", 0, 0, "W")]],
     "lobby": [[("rug_small", 0, 0, "W"), ("coffee_table", 0, 0, "N")]],
 }
 _TURN = {"W": "N", "N": "W", "E": "S", "S": "E"}
@@ -1993,12 +2056,51 @@ def _furnish_middle(plan: Plan, idx: int, room: Room,
         return [(palette.get(role, role), dx, dy, o) for role, dx, dy, o in group]
 
     group, repeat = spec
+    before = len(plan.furniture)
     placed = _place_group(plan, idx, room, own(group), repeat, occupied, keep_clear)
     for smaller in FALLBACK_GROUPS.get(room.kind, ()):
         if placed:
             break
         placed = _place_group(plan, idx, room, own(smaller), 1, occupied, keep_clear)
+    if placed:
+        _seat_the_table(plan, idx, keep_clear, plan.furniture[before:])
     return placed
+
+
+# Every piece in a centre group needs its own clear block and a tile of aisle
+# all round the group, so in a kitchen four tiles across only the bare table
+# ever fitted: 0.17 chairs a kitchen against the game's 1.10. A chair is
+# tucked against the table, not given an aisle of its own, so they go on after
+# the group is down.
+TABLE_SEATS = 2
+_BESIDE = (((-1, 0), "W"), ((1, 0), "E"), ((0, -1), "N"), ((0, 1), "S"))
+
+
+def _seat_the_table(plan: Plan, idx: int, keep_clear: set[tuple[int, int]],
+                    added: list) -> None:
+    """Chairs on the free tiles beside a table the centre group just put down."""
+    tables = [(role, x, y, o) for role, x, y, o in added
+              if role in ("round_table", "dining_table")]
+    if not tables:
+        return
+    taken = {c for role, x, y, o in plan.furniture
+             if C.FURNITURE_LAYERS.get(role, "Furniture") == "Furniture"
+             for c in _cells_for(role, x, y, o)}
+    # Only up to what the group would have seated anyway: a dining table that
+    # already came with four chairs is not given two more.
+    already = sum(1 for role, *_ in added if role == "chair") // len(tables)
+    for role, tx, ty, orient in tables:
+        seats = already
+        for cell in _cells_for(role, tx, ty, orient):
+            for (dx, dy), side in _BESIDE:
+                if seats >= TABLE_SEATS:
+                    break
+                x, y = cell[0] + dx, cell[1] + dy
+                if (x, y) in taken or (x, y) in keep_clear or _room_at(plan, x, y) != idx:
+                    continue
+                plan.furniture.append(("chair", x, y, _facing("chair", side)))
+                taken.add((x, y))
+                seats += 1
 
 
 # Pieces a room has one of, however big it is.
@@ -3009,8 +3111,13 @@ def build_plan(width: int, height: int, commercial: bool = False,
     elif shop_floor and kind in ("shop", "restaurant"):
         _shop_rooms(plan, rng, street)
     else:
+        # A house floor gets one bathroom-sized room; anything else cut this
+        # way - a factory floor, a civic building - has no bathroom to put in
+        # it and is left alone.
+        house_floor = not (shop_floor or commercial
+                           or (mix_kind and mix_kind in SPECIAL_MIXES))
         _split(0, 0, width - 1, height - 1, rng, MAX_DEPTH, plan.rooms,
-               target_area=target, mask=mask)
+               target_area=target, mask=mask, small=[house_floor])
     _paint(plan)
 
     # Kinds are chosen after painting, from the plan as it really is: what a
