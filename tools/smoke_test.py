@@ -83,10 +83,19 @@ def run(work: str, report: Report, compile_too: bool = False) -> None:
         build(out, settings=Settings(seed=1))
     bdir = os.path.join(out, "buildings")
     tbx = sorted(f for f in os.listdir(bdir) if f.endswith(".tbx"))
+    # The CSV is the buildings; the rest of what lands in buildings/ is
+    # fences, raised structures, petrol pumps and props. What has to hold is
+    # that the project places every one of them - a .tbx nothing refers to is
+    # a building generated and then lost.
     rows = open(os.path.join(out, "smoke_placements.csv"),
                 encoding="utf-8").read().splitlines()[1:]
-    report.say("buildings", f"{len(tbx)} built, {len(rows)} placed on the map",
-               len(tbx) >= 20 and len(rows) >= 20)
+    import re as _re
+    project = open(os.path.join(out, "smoke.pzw"), encoding="utf-8").read()
+    placed = set(_re.findall(r"buildings/([A-Za-z0-9_]+\.tbx)", project))
+    lost = [f for f in tbx if f not in placed]
+    report.say("buildings", f"{len(rows)} buildings, {len(tbx)} .tbx with the "
+                            f"fences and props, {len(lost)} of them unplaced",
+               len(rows) >= 20 and not lost)
 
     # 3. Every .tbx the way the game reads it: rooms closed, nothing outside
     #    its own walls, no furniture hanging through one.
