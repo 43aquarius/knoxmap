@@ -1108,7 +1108,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                                      porch_lights)
     # The lights stand outside the houses, past the edge of their own .tbx.
     from .structures import pack_loose
-    light_placements = pack_loose(bdir, map_name, "lights", porch_lights)
+    light_placements = pack_loose(bdir, map_name, "lights", porch_lights,
+                                  on_top=True)
 
     # Pumps on a forecourt at each petrol station, including those mapped as
     # a point with no building of their own.

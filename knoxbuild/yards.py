@@ -59,7 +59,11 @@ PORCH_LIGHTS = [
      "S": "lighting_outdoor_01_44", "E": "lighting_outdoor_01_45"},
 ]
 PORCH_LIGHT_SHARE = 0.92
-PORCH_LIGHT_LAYER = "Furniture"
+# The square the light stands on usually carries the house wall as well, and
+# what is written last is drawn last: on the Furniture layer the wall went on
+# top and the light was invisible. Every one of the 659 vanilla porch lights
+# that shares a square with an exterior wall is written after it.
+PORCH_LIGHT_LAYER = "WallFurniture"
 # The side the house is on, from the tile the light stands on.
 _SIDE = {(0, -1): "N", (0, 1): "S", (-1, 0): "W", (1, 0): "E"}
 

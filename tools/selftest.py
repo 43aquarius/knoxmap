@@ -1531,6 +1531,17 @@ def check_porch_lights(check, out: str) -> None:
           f"and each one has a sprite for the wall it hangs on "
           f"({len(PORCH_LIGHTS)} styles, {len(used)} used)")
 
+    # The light shares its square with the house wall, and WorldEd lays a
+    # cell's lots down in the order the project lists them. Sorted by position
+    # the light went down first and the wall covered it: in the game there was
+    # nothing on the wall at all.
+    from knoxbuild.world import Placement, render_pzw
+    order = re.findall(r'map="buildings/(\w+)\.tbx"', render_pzw(
+        1, 1, "m.bmp", [Placement("buildings/lamp.tbx", 40, 10, 2, 2, on_top=True),
+                        Placement("buildings/house.tbx", 8, 40, 12, 10)]))
+    check(order == ["house", "lamp"],
+          f"and is laid down after the wall it hangs on, not before it ({order})")
+
 
 def check_repair(check, out: str) -> None:
     """A project broken at its edges, as older versions and hand edits leave

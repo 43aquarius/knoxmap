@@ -30,7 +30,12 @@
   outdoor light standing outside a house with house tiles on exactly one side,
   that side — and the five sets used came back 96–100% one-sided over 60 to 140
   sightings each. They are written as loose tiles, because they stand outside
-  the building and a house's own `.tbx` stops at its footprint.
+  the building and a house's own `.tbx` stops at its footprint. The square a
+  light stands on usually carries the house wall too, and WorldEd lays a
+  cell's lots down in the order the project lists them — sorted by position,
+  the light went down before the wall and the wall covered it. A lot can now
+  ask to go last, which is where all 659 of Knox County's porch lights that
+  share a square with a wall are written.
 
 ## 1.4.3.3
 

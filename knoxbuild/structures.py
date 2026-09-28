@@ -59,7 +59,8 @@ def build_structures(out_dir: str, map_name: str, bdir: str) -> tuple[list, dict
                         "monuments": data.get("monuments", 0), "tiles": len(rows)}
 
 
-def pack_loose(bdir: str, map_name: str, tag: str, tiles: list) -> list:
+def pack_loose(bdir: str, map_name: str, tag: str, tiles: list,
+               on_top: bool = False) -> list:
     """Loose (x, y, level, layer, tile) squares written as one .tbx per cell.
 
     A lot spanning cells is refused by WorldEd, so they are grouped by the
@@ -80,7 +81,8 @@ def pack_loose(bdir: str, map_name: str, tag: str, tiles: list) -> list:
         with open(os.path.join(bdir, fname), "w", encoding="utf-8") as f:
             f.write(render_tiles_tbx(gw, gh, [(x - gx0, y - gy0, z, layer, tile)
                                               for x, y, z, layer, tile in group]))
-        placements.append(Placement(f"buildings/{fname}", gx0, gy0, gw, gh))
+        placements.append(Placement(f"buildings/{fname}", gx0, gy0, gw, gh,
+                                    on_top=on_top))
     return placements
 
 
