@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.3.4
+## 1.4.4
 
 - **Lamps and pot plants stand on something that reaches them**
   (`knoxbuild/layout.py`). A small piece is drawn with its base part-way up its
