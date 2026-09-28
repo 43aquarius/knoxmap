@@ -118,6 +118,24 @@ def run(work: str, report: Report, compile_too: bool = False) -> None:
                             f"({pieces / max(len(tbx), 1):.0f} per building)",
                pieces > len(tbx) * 10)
 
+    # 4b. And the outside of them. Knox County hangs a light by 92% of its
+    #     front doors; without one a street of houses reads as unfinished.
+    import csv as _csv
+    houses = sum(1 for r in _csv.DictReader(open(
+        os.path.join(out, "smoke_placements.csv"), encoding="utf-8"))
+        if r["kind"] == "house")
+    lit = 0
+    for name in tbx:
+        if "_lights_" not in name:
+            continue
+        text = open(os.path.join(bdir, name), encoding="utf-8").read()
+        for grid in _re.findall(r'<tiles layer="[^"]*">(.*?)</tiles>', text, _re.S):
+            lit += sum(1 for v in grid.replace("\n", "").split(",")
+                       if v.strip() not in ("", "0"))
+    report.say("front doors", f"{lit} porch lights on {houses} houses "
+                              f"({100 * lit / max(houses, 1):.0f}%, the game's is 92%)",
+               houses and lit >= houses * 0.8)
+
     # 5. Where the map landed. A map on a PC with nothing installed belongs on
     #    the standard origin: the further east it sits, the smaller the town
     #    draws on a paper map that is one grid counted from cell 0.

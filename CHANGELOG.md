@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.3.4
+
+- **A light by the front door** (`knoxbuild/yards.py`). Knox County hangs one
+  outside 92% of its houses; generated ones had 1%, which is most of why a
+  street of them reads as unfinished from outside. One goes on the wall beside
+  every front door, on the slab the stoop already lays. Which sprite belongs on
+  which wall was read off the vanilla map rather than guessed — for every
+  outdoor light standing outside a house with house tiles on exactly one side,
+  that side — and the five sets used came back 96–100% one-sided over 60 to 140
+  sightings each. They are written as loose tiles, because they stand outside
+  the building and a house's own `.tbx` stops at its footprint.
+
 ## 1.4.3.3
 
 - **Maps stop drifting east** (`knoxbuild/world.py`). Generating makes a new

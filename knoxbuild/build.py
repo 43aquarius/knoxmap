@@ -1103,7 +1103,12 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         origin(), CELL_SIZE)
     from .yards import paint_paths
     drives: list = []
-    paths, yard_fences = paint_paths(out_dir, map_name, rows, occupied, drives)
+    porch_lights: list = []
+    paths, yard_fences = paint_paths(out_dir, map_name, rows, occupied, drives,
+                                     porch_lights)
+    # The lights stand outside the houses, past the edge of their own .tbx.
+    from .structures import pack_loose
+    light_placements = pack_loose(bdir, map_name, "lights", porch_lights)
 
     # Pumps on a forecourt at each petrol station, including those mapped as
     # a point with no building of their own.
@@ -1149,7 +1154,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     from .structures import build_structures
     structure_placements, raised = build_structures(out_dir, map_name, bdir)
     placements = (placements + fence_placements + structure_placements +
-                  pump_placements + prop_placements)
+                  pump_placements + prop_placements + light_placements)
 
     pzw_path = os.path.join(out_dir, f"{map_name}.pzw")
     with open(pzw_path, "w", encoding="utf-8") as f:
@@ -1211,6 +1216,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     print(f"front paths, yards    : {paths} houses, {len(yard_fences)} back yards")
     print(f"graves, army stores  : {prop_counts['graves']} graves, "
           f"{prop_counts['dumps']} stacks of stores")
+    print(f"porch lights         : {len(porch_lights)} by front doors")
     print(f"fences                : {fence_tiles} fence tiles in "
           f"{len(fence_placements)} lots")
     print(f"bridges, monuments    : {raised['bridges']} bridges, "

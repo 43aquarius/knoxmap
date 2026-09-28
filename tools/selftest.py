@@ -1487,6 +1487,51 @@ def check_overture(check, work: str) -> None:
           "a map that used Overture credits it, and one that did not does not")
 
 
+def check_porch_lights(check, out: str) -> None:
+    """A light by the front door of nearly every house.
+
+    Knox County has one outside 92% of its houses and generated ones had 1%,
+    which is most of why a street of them read as unfinished from outside.
+    """
+    import csv as _csv
+
+    from knoxbuild.yards import PORCH_LIGHTS, _SIDE
+
+    name = os.path.basename(out.rstrip(os.sep))
+    bdir = os.path.join(out, "buildings")
+    rows = list(_csv.DictReader(open(os.path.join(out, f"{name}_placements.csv"),
+                                     encoding="utf-8")))
+    houses = sum(1 for r in rows if r["kind"] == "house")
+
+    lit = 0
+    used = set()
+    for fname in sorted(f for f in os.listdir(bdir) if "_lights_" in f):
+        text = open(os.path.join(bdir, fname), encoding="utf-8").read()
+        block = re.search(r"<user_tiles>(.*?)</user_tiles>", text, re.S)
+        order = re.findall(r'<tile tile="([^"]+)"/>', block.group(1)) if block else []
+        for grid in re.findall(r'<tiles layer="[^"]*">(.*?)</tiles>', text, re.S):
+            for value in grid.split(","):
+                value = value.strip()
+                if value and value != "0":
+                    lit += 1
+                    if int(value) - 1 < len(order):
+                        used.add(order[int(value) - 1])
+    check(houses and lit >= houses * 0.8,
+          f"a light by the front door of nearly every house ({lit} on {houses})")
+
+    # The sprite carries the direction, so the table is the thing that can go
+    # wrong: a side missing, or one tile answering two of them.
+    from collections import Counter as _Counter
+    seen = _Counter()
+    shaped = all(set(style) == set(_SIDE.values()) for style in PORCH_LIGHTS)
+    for style in PORCH_LIGHTS:
+        seen.update(style.values())
+    known = {t for style in PORCH_LIGHTS for t in style.values()}
+    check(shaped and max(seen.values()) == 1 and used <= known,
+          f"and each one has a sprite for the wall it hangs on "
+          f"({len(PORCH_LIGHTS)} styles, {len(used)} used)")
+
+
 def check_repair(check, out: str) -> None:
     """A project broken at its edges, as older versions and hand edits leave
     them, is repaired before compiling instead of stopping it."""
@@ -1982,6 +2027,7 @@ def main(argv: list[str]) -> int:
         check_compile_failures(check, work)
         check_wall_corners(check)
         check_overture(check, work)
+        check_porch_lights(check, out)
         check_repair(check, out)
         from knoxbuild.world import Placement, Zone, render_pzw
         edge = render_pzw(2, 2, "m.bmp", [Placement("a.tbx", 10, 599, 3, 3),
@@ -2022,7 +2068,12 @@ def main(argv: list[str]) -> int:
             west = re.search(r'enum="West" tile="(\w+)"', blocks[ext - 1])
             gap = re.search(r'enum="CapGapE3" tile="(\w+)"', blocks[cap - 1])
             return bool(west and gap and west.group(1) == gap.group(1))
-        houses_tbx = [t for p, t in zip(tbx, texts) if not any(k in p for k in ("_fences_", "_structures_", "_pumps_", "_props_"))]
+        # The buildings, by their numbered names. Everything else in the
+        # folder - fences, structures, pumps, props, porch lights - is loose
+        # tiles with no rooms and none of a building's tile entries, and the
+        # list of those to leave out kept going stale as kinds were added.
+        houses_tbx = [t for p, t in zip(tbx, texts)
+                      if re.search(r"_\d{4}(_\d{2})?\.tbx$", os.path.basename(p))]
         check(all(gaps_match(t) for t in houses_tbx), "flat roofs wall in the top floor with its own material")
         check(any("_fences_" in p for p in tbx), "back yards are fenced")
         yard = Image.open(os.path.join(out, "selftest.bmp")).convert("RGB")
