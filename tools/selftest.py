@@ -279,15 +279,42 @@ def check_1_3_6(check, out: str, tbx: list[str], pzw_text: str, log: str) -> Non
     check(len(aisle) >= 3,
           f"a mall's rows are a mix, not one piece repeated ({dict(aisle)})")
 
-    # The first map on a PC keeps the old origin; the next one stands clear.
+    # The first map on a PC keeps the old origin, and so does the next one:
+    # generating makes a new folder every time, and those used to claim their
+    # cells for good, so each map started further east than the last until the
+    # town drew as a speck in the corner of the paper map.
     origin = re.search(r'<worldOrigin origin="(\d+),(\d+)"', pzw_text)
     check(origin and (int(origin.group(1)), int(origin.group(2))) == WORLD_ORIGIN_CELLS,
           "the first map is built where every map used to be")
     beside = os.path.join(os.path.dirname(out), "elsewhere")
     os.makedirs(beside, exist_ok=True)
-    picked = choose_origin(beside, 3, 3)
-    check(picked[0] >= WORLD_ORIGIN_CELLS[0] + 3,
-          f"a second map is built clear of the first (cell {picked[0]},{picked[1]})")
+    # On a PC with nothing installed, whatever is sitting in output/.
+    empty = tempfile.mkdtemp(prefix="knoxmap-zomboid-")
+    was = os.environ.get("ZOMBOID_DIR")
+    os.environ["ZOMBOID_DIR"] = empty
+    try:
+        picked = choose_origin(beside, 3, 3)
+        check(picked == WORLD_ORIGIN_CELLS,
+              f"a map built beside one nobody installed lands there too "
+              f"(cell {picked[0]},{picked[1]})")
+
+        # What does stand clear is a map already installed, which is the only
+        # thing that can be in the same world at the same time.
+        cells = (Path(empty) / "mods" / "SomeOtherMap" / "common" / "media"
+                 / "maps" / "Some Other Map")
+        cells.mkdir(parents=True, exist_ok=True)
+        for cx in range(82, 86):
+            (cells / f"world_{cx}_0.lotheader").write_text("")
+        picked = choose_origin(beside, 3, 3)
+        check(picked[0] >= WORLD_ORIGIN_CELLS[0] + 3,
+              f"a map is built clear of one already installed "
+              f"(cell {picked[0]},{picked[1]})")
+    finally:
+        if was is None:
+            os.environ.pop("ZOMBOID_DIR", None)
+        else:
+            os.environ["ZOMBOID_DIR"] = was
+        shutil.rmtree(empty, ignore_errors=True)
     shutil.rmtree(beside, ignore_errors=True)
 
 

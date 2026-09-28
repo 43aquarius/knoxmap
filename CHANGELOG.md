@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.3.3
+
+- **Maps stop drifting east** (`knoxbuild/world.py`). Generating makes a new
+  output folder every time, and every folder claimed its cells in the world for
+  good, whether it was ever installed or not. So each map started further out
+  than the last — 70, 98, 104, 110, 132, 159 on the PC this was found on — and
+  the paper map is one grid counted from cell 0, so the town drew smaller and
+  further into the corner of an empty world with every generation. Only
+  installed maps hold a place now, and uninstalling one hands its cells back. A
+  new map lands on 70,0 again, where the first one did.
+
+- **A smoke test** (`tools/smoke_test.py`). The selftest is 200 checks and
+  several minutes; this is the end-to-end path on its own — terrain, buildings,
+  paper map, install — with the numbers printed rather than asserted, for
+  checking a release in a minute.
+
 ## 1.4.3.2
 
 - **More than one kind of sink** (`knoxbuild/catalog.py`). Every kitchen in a

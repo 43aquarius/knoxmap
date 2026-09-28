@@ -31,12 +31,12 @@ WORLD_ORIGIN_CELLS = (70, 0)
 # KnoxMap maps installed had both claiming the same cells: the game reads
 # one cell's header and the other cell's data and falls over on the way in.
 #
-# So each map is given the first free run of cells east of the ones already
-# built or installed, with a cell or two of empty ground between. They stay
-# packed tight on purpose - the game lays out one grid covering every cell
-# any map uses, so maps scattered across the world would be a grid mostly
-# made of nothing. The first map on a PC still lands on 70,0, so nothing
-# already built moves.
+# So each map is given the first free run of cells east of the maps already
+# installed, with a cell or two of empty ground between. They stay packed
+# tight on purpose - the game lays out one grid covering every cell any map
+# uses, so maps scattered across the world would be a grid mostly made of
+# nothing, and the paper map draws the town smaller the further out it sits.
+# A map with no other installed beside it lands on 70,0.
 ORIGIN_GAP_CELLS = 2
 
 _ORIGIN = list(WORLD_ORIGIN_CELLS)
@@ -115,19 +115,14 @@ def choose_origin(out_dir: str, cells_x: int, cells_y: int) -> tuple[int, int]:
     if mine:
         return mine[0], mine[1]
 
+    # Only what is installed holds a place. Every generation makes a new
+    # output folder, and those used to claim their cells for good: the tenth
+    # map a PC built started ninety cells further east than the first, and the
+    # paper map is one grid from cell 0, so the town drew as a speck in the
+    # corner of an empty world. A folder nobody installed is a project on
+    # disk, not something in anybody's game, and uninstalling a map now hands
+    # its cells back.
     taken = _installed_boxes()
-    root = os.path.dirname(here)
-    try:
-        siblings = os.listdir(root)
-    except OSError:
-        siblings = []
-    for entry in siblings:
-        folder = os.path.join(root, entry)
-        if not os.path.isdir(folder) or os.path.abspath(folder) == here:
-            continue
-        box = _project_box(os.path.join(folder, f"{entry}.pzw"))
-        if box:
-            taken.append(box)
 
     ox, oy = WORLD_ORIGIN_CELLS
     for _ in range(len(taken) + 1):
