@@ -1911,6 +1911,132 @@ def check_overpass_retry(check) -> None:
         _osm.RETRY_PAUSE_S = was_pause
 
 
+def check_flat_selection(check) -> None:
+    """An outline with no area is refused, not built as an empty map.
+
+    A lasso drawn as one stroke, or a traced outline whose points land on each
+    other, gets through as a valid polygon that encloses nothing. The renderer
+    clips the map to it, which turns everything outside - all of it - back
+    into grass, and the generation finishes and hands over a meadow.
+    """
+    import app as knoxapp
+
+    w, s, e, n = 19.20, 42.40, 19.32, 42.48
+
+    def ask(ring):
+        shape, problem = knoxapp._clean_shape(
+            {"type": "Polygon", "coordinates": [ring]})
+        return shape, problem
+
+    shape, problem = ask([[w, s], [e, s], [e, n], [w, n], [w, s]])
+    check(shape is not None and not problem,
+          "an outline drawn round a town is taken")
+
+    # Small, but a real selection: roughly 220 m across. Nothing here may
+    # refuse a genuinely small map.
+    shape, problem = ask([[w, s], [w + 0.002, s], [w + 0.002, s + 0.002],
+                          [w, s + 0.002], [w, s]])
+    check(shape is not None and not problem,
+          "and so is a small one, a couple of hundred metres across")
+
+    for label, ring in (
+        ("one stroke", [[w, s], [(w + e) / 2, (s + n) / 2], [e, n], [w, s]]),
+        ("all one point", [[w, s]] * 4),
+    ):
+        shape, problem = ask(ring)
+        check(shape is None and problem and "no area" in problem,
+              f"an outline that is {label} is refused with a reason, not "
+              f"generated as empty ground")
+
+
+def check_overpass_blank(check) -> None:
+    """A server that answers with nothing does not empty the map.
+
+    Two ways a download used to succeed and bring back no town. Overpass
+    reports a query it could not finish as HTTP 200 with the reason in
+    "remark" and whatever it had managed in "elements"; and one of the public
+    instances answers every query at all with 200 and an empty list. Either
+    read as a tile of open farmland, so a city came out a meadow with its
+    river still in it - the river was in the tiles that did arrive. Nothing
+    here touches the network.
+    """
+    from generator import osm as _osm
+
+    class Reply:
+        def __init__(self, payload, status=200):
+            self.status_code = status
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    ONE = {"elements": [{"type": "node", "id": 1, "lat": 50.0, "lon": 5.0,
+                         "tags": {"natural": "tree"}}]}
+    EMPTY: dict = {"elements": []}
+
+    was_post, was_sleep = _osm.requests.post, _osm.time.sleep
+    try:
+        _osm.time.sleep = lambda _s: None
+        replies: dict = {}
+        asked: list = []
+
+        def post(endpoint, data=None, headers=None, timeout=None):
+            asked.append(endpoint.split("/")[2])
+            return replies.get(asked[-1], Reply(EMPTY))
+
+        _osm.requests.post = post
+        first_host = _osm.OVERPASS_ENDPOINTS[0].split("/")[2]
+
+        # A part-finished query is a failure, not an empty tile.
+        replies = {first_host: Reply({**EMPTY, "remark":
+                   'runtime error: Query timed out in "query" after 90 s.'})}
+        try:
+            _osm._ask(_osm.OVERPASS_ENDPOINTS[0], "", 60)
+            said, big = "", False
+        except _osm.OverpassError as exc:
+            said, big = str(exc), exc.too_big
+        check("timed out" in said and big,
+              "a 200 that says the query timed out counts as too big, not as "
+              "an empty tile")
+
+        # The instance whose turn it is answers with nothing; another has the
+        # data. The tile is the data.
+        last_host = _osm.OVERPASS_ENDPOINTS[-1].split("/")[2]
+        replies = {first_host: Reply(ONE)}
+        asked.clear()
+        got = _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10,
+                                  first=len(_osm.OVERPASS_ENDPOINTS) - 1)
+        check(len(got) == 1 and asked[0] == last_host,
+              f"a blank answer from {last_host} is not the tile; the next "
+              f"instance is asked and its {len(got)} feature kept")
+
+        # ...but real open country is empty, and has to stay downloadable.
+        replies = {}
+        got = _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10)
+        check(got == [],
+              "a tile every instance agrees is empty is still an empty tile")
+
+        # One instance saying nothing while the rest never answer is not
+        # agreement. The tile goes back round the retry rather than into the
+        # map as a field.
+        replies = {h.split("/")[2]: Reply({}, status=504)
+                   for h in _osm.OVERPASS_ENDPOINTS[1:]}
+        try:
+            got = _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10)
+            said = f"returned {len(got)} features"
+        except _osm.OverpassError:
+            said = "raised"
+        check(said == "raised",
+              "one blank answer and no other answer at all is a failed tile, "
+              f"not an empty one ({said})")
+
+        check("openstreetmap.fr" not in " ".join(_osm.OVERPASS_ENDPOINTS),
+              "the endpoint that 403s every request is not asked")
+    finally:
+        _osm.requests.post, _osm.time.sleep = was_post, was_sleep
+
+
 def check_no_size_wall(check, work: str) -> None:
     """An area bigger than the comfortable one is still built.
 
@@ -2518,6 +2644,8 @@ def main(argv: list[str]) -> int:
         check_mapstate(check, out)
         check_no_size_wall(check, work)
         check_overpass_retry(check)
+        check_overpass_blank(check)
+        check_flat_selection(check)
         check_memory_guard(check)
         check_box_any(check)
 

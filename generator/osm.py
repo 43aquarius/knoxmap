@@ -24,11 +24,21 @@ import knoxstop
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.openstreetmap.fr/api/interpreter",
-    # A fourth, because the other three go busy together: when one instance
+    # A third, because the other two go busy together: when one instance
     # is queueing the people it turned away are queueing on the next.
+    # It is last because it is the one that answers an ordinary query with an
+    # empty result - see EMPTY_NEEDS_SECOND below.
     "https://overpass.osm.ch/api/interpreter",
 ]
+# overpass.openstreetmap.fr answers every query with 403 "This service is only
+# available to white-listed usages". It was tried once per tile, and on the
+# tiles whose turn it was it pushed the work onto whatever came next.
+
+# Whether an empty answer has to be confirmed by another instance before the
+# tile is taken as empty ground (fetch_features), and how many have to agree.
+# The flag is off only for tests, which would otherwise ask the real servers.
+EMPTY_NEEDS_SECOND = True
+BLANKS_TO_BELIEVE = 2
 
 # OSM's usage policy requires a real identifying User-Agent; the mirrors return
 # 403 for the default "python-requests/x.y" string.
@@ -218,7 +228,17 @@ def _ask(endpoint: str, query: str, timeout: int) -> list[OSMFeature]:
     r = requests.post(endpoint, data={"data": query}, headers=HEADERS,
                       timeout=timeout + 10)
     if r.status_code == 200:
-        return _parse(r.json())
+        payload = r.json()
+        # A query that runs out of time or memory part way through does not
+        # fail: Overpass sends HTTP 200 with whatever it had gathered and puts
+        # the reason in "remark". Reading only the status took that for a
+        # finished tile, so a town downloaded "successfully" with half its
+        # streets missing and nothing anywhere said so.
+        remark = str(payload.get("remark") or "")
+        if any(s in remark.lower() for s in _TOO_BIG):
+            raise OverpassError(f"partial answer — {' '.join(remark.split())}",
+                                too_big=True)
+        return _parse(payload)
     # Classify on the whole body, report a trimmed version of it. Doing both
     # from the trimmed text is what stopped over-large areas re-splitting: the
     # markers sit well past the doctype, so nothing ever looked too big.
@@ -247,11 +267,12 @@ def fetch_features(south: float, west: float, north: float, east: float,
     errors: list[str] = []
     too_big = False
     timed_out = False
+    blank = 0
     order = OVERPASS_ENDPOINTS[first % len(OVERPASS_ENDPOINTS):]         + OVERPASS_ENDPOINTS[:first % len(OVERPASS_ENDPOINTS)]
     for endpoint in order:
         host = endpoint.split("/")[2]
         try:
-            return _ask(endpoint, query, timeout)
+            feats = _ask(endpoint, query, timeout)
         except OverpassError as exc:
             errors.append(f"{host}: {exc}")
             too_big = too_big or exc.too_big
@@ -260,7 +281,25 @@ def fetch_features(south: float, west: float, north: float, east: float,
             timed_out = True
         except (requests.RequestException, ValueError) as exc:
             errors.append(f"{host}: {exc}")
+        else:
+            if feats or not EMPTY_NEEDS_SECOND:
+                return feats
+            # An instance that answers 200 with nothing in it looks exactly
+            # like open farmland, and the tiles it was handed went into the map
+            # as empty ground. A city came out a meadow with its river still
+            # in it, because the tiles that did download held the river.
+            # Nothing is only believed when a second instance agrees.
+            blank += 1
+            errors.append(f"{host}: answered with nothing")
         time.sleep(1)
+    # Two instances have to say the tile is empty before it is. One saying so
+    # while the others never answered at all is not agreement, it is the one
+    # broken instance again - and taking it at its word is what quietly
+    # emptied the map in the first place. Raising sends the tile back round
+    # fetch_features_tiled's retry, and if it really will not download the
+    # download says so instead of handing back a meadow.
+    if blank >= BLANKS_TO_BELIEVE:
+        return []
     raise OverpassError("every Overpass endpoint failed — "
                         + "; ".join(errors), too_big=too_big,
                         timed_out=timed_out)

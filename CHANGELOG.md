@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.6
+
+- **A map is not empty because a server said nothing** (`generator/osm.py`).
+  Two ways the download reported success and brought back no town. Overpass
+  answers a query it could not finish with HTTP 200, the part it managed in
+  `elements` and the reason in `remark`; only the status was read, so a
+  half-downloaded tile went in as a finished one. And `overpass.osm.ch`
+  answers every query with 200 and an empty list — a one-block query that
+  `overpass-api.de` returns 674 elements for. Tiles are dealt to the instances
+  in turn, so a third of a city's tiles were handed to it and came back as
+  open ground, which is why a town rendered as a meadow with its river still
+  in it: the river was in the tiles that did arrive. A `remark` is now a
+  failed tile, and an empty answer has to be confirmed by a second instance
+  before the tile counts as empty. `overpass.openstreetmap.fr` is dropped; it
+  has been 403 "only available to white-listed usages" on every request.
+
+- **An outline with no area is refused** (`app.py`). A lasso drawn as one
+  stroke, or a traced outline whose points land on each other, passed as a
+  valid polygon that encloses nothing. The map is clipped to the drawn shape,
+  so everything outside it — all of it — went back to grass, and the
+  generation ran to the end and handed over a meadow. It is turned down now
+  with a reason, before the download.
+
 ## 1.4.5
 
 - **Public squares are paved** (`generator/osm.py`, `generator/renderer.py`). A
