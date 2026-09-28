@@ -561,11 +561,22 @@ UNPAVED_SURFACES = {"unpaved", "dirt", "earth", "ground", "grass", "gravel",
 TUNNEL_VALUES = {"yes", "building_passage", "culvert", "avalanche_protector", "flooded"}
 
 
-def classify(tags: dict) -> str | None:
-    """Map OSM tags to a PZ feature category string. None = ignore."""
+def classify(tags: dict, area: bool = False) -> str | None:
+    """Map OSM tags to a PZ feature category string. None = ignore.
+
+    `area` says the feature is a closed way or a relation - something with an
+    inside - which changes two answers. An arcade is not a tunnel, and a
+    pedestrian way that closes on itself is a square rather than a street.
+    """
     if "building" in tags:
         return "building"
-    if (tags.get("tunnel") in TUNNEL_VALUES or tags.get("location") == "underground"
+    # A building passage is a way through a building at ground level, not
+    # under it - a colonnade or an archway. Read as a tunnel it took Madrid's
+    # Plaza Mayor, 11,437 m2 of it, off the map altogether and left grass.
+    underground = tags.get("tunnel") in TUNNEL_VALUES
+    if area and tags.get("tunnel") == "building_passage":
+        underground = False
+    if (underground or tags.get("location") == "underground"
             or tags.get("parking") == "underground"):
         return None
 
@@ -580,8 +591,16 @@ def classify(tags: dict) -> str | None:
         return "parking"
     if amenity == "bus_station":
         return "parking"
+    # A pedestrian street is drawn as a line and a pedestrian square as a fill.
+    # Which it is, is whether the way closes on itself: area=yes says so when
+    # the mapper remembered it, and the shape says so either way. The same for
+    # the colonnade round a square, which is a footway that comes back to
+    # where it started.
     if tags.get("place") == "square" or "area:highway" in tags or (
-            tags.get("highway") == "pedestrian" and tags.get("area") == "yes"):
+            tags.get("highway") == "pedestrian"
+            and (area or tags.get("area") == "yes")) or (
+            area and tags.get("highway") == "footway"
+            and tags.get("covered") in ("colonnade", "arcade", "yes")):
         return "plaza"
 
     h = tags.get("highway")
@@ -593,9 +612,15 @@ def classify(tags: dict) -> str | None:
             return "road_medium"
         if h in {"residential", "unclassified", "living_street"}:
             return "road_minor"
+        # A pedestrian zone is a square people stand in, not a lane. Lumped
+        # in with service alleys it was painted three and a half metres wide,
+        # so Madrid's Puerta del Sol - mapped as a mesh of pedestrian ways and
+        # no polygon at all - came out as a few paved stripes on grass.
+        if h == "pedestrian":
+            return "pedestrian"
         # Alleys, driveways and back lanes. Lumping these in with residential
         # streets paved every yard and car park aisle at full street width.
-        if h in {"service", "pedestrian"}:
+        if h == "service":
             return "road_service"
         if h in {"track", "path", "footway", "cycleway", "bridleway", "steps"}:
             # A city's pavements are mapped as footways alongside each street,

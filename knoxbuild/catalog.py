@@ -254,10 +254,13 @@ FURNITURE = {'bed': {'W': {'0,0': 'furniture_bedding_01_002', '1,0': 'furniture_
               'N': {'0,0': 'furniture_storage_01_002', '1,0': 'furniture_storage_01_003'},
               'E': {'0,0': 'furniture_storage_01_005', '0,1': 'furniture_storage_01_004'},
               'S': {'0,0': 'furniture_storage_01_006', '1,0': 'furniture_storage_01_007'}},
- 'crate': {'W': {'0,0': 'furniture_storage_02_024'},
-           'N': {'0,0': 'furniture_storage_02_025'},
-           'E': {'0,0': 'furniture_storage_02_026'},
-           'S': {'0,0': 'furniture_storage_02_027'}},
+ # 024-027 are the same boxes drawn raised, for stacking on top of
+ # another; on the floor they hover a quarter of a tile above it. Knox County
+ # puts 336 of its 338 boxes on 016-019, which is this box on the ground.
+ 'crate': {'W': {'0,0': 'furniture_storage_02_016'},
+           'N': {'0,0': 'furniture_storage_02_017'},
+           'E': {'0,0': 'furniture_storage_02_018'},
+           'S': {'0,0': 'furniture_storage_02_019'}},
  'dresser': {'W': {'0,0': 'furniture_storage_01_008'},
              'N': {'0,0': 'furniture_storage_01_009'},
              'E': {'0,0': 'furniture_storage_01_010'},
@@ -7142,7 +7145,17 @@ ROOM_COLORS = {'livingroom': '233 112 19',
  'policegunstorage': '10 198 66',
  'policearchive': '138 108 71',
  'interrogationroom': '218 41 17',
- 'cells': '141 215 71',
+ # BuildingEd wants a colour for every room name, and a missing one throws
+ # while the .tbx is written - which quietly dropped the school and the
+ # police station from a town rather than failing loudly.
+ 'prisoncells': '141 215 71',
+ 'diningroom': '150 232 138',
+ 'schoollab': '96 206 196',
+ 'schoolstorage': '214 206 80',
+ 'sportstorage': '196 176 60',
+ 'janitor': '120 150 110',
+ 'security': '70 130 180',
+ 'officestorage': '204 186 90',
  'firegarage': '102 145 188',
  'firestorage': '21 177 44'}
 

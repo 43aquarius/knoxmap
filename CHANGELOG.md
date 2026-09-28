@@ -1,5 +1,72 @@
 # Changelog
 
+## 1.4.5
+
+- **Public squares are paved** (`generator/osm.py`, `generator/renderer.py`). A
+  pedestrian zone was read as a service alley and painted 3.5 m wide, so Madrid's
+  Puerta del Sol — a mesh of pedestrian ways with no polygon anywhere — came out
+  as stripes on a lawn. And an arcade, tagged as a passage through a building,
+  was read as a tunnel and dropped, which took all 11,437 m² of Plaza Mayor with
+  it. A pedestrian zone is its own class now, paved 9 m wide; a pedestrian way
+  that closes on itself is a square whether or not it says `area=yes`; and a
+  building passage is at ground level, not under it. Plaza Mayor, Puerta del Sol
+  and Plaza de Santa Ana all paved, checked by downloading the real thing.
+
+- **A school is a school inside** (`knoxbuild/layout.py`). The fill list was
+  cycled round-robin once the mix was spent, so every kind in it got an equal
+  share however silly: a school came out with 61 lavatories and 58 offices to
+  its 63 classrooms, a police station with seven locker rooms, a church with as
+  many storerooms as nave. Each kind has a share of a floor now. Schools gained
+  a canteen, a laboratory, gym stores and janitors; barracks lost the police
+  office that was in them.
+
+- **Cells the game knows what to put in** (`knoxbuild/layout.py`). Every room
+  name was checked against the 586 in Knox County and `cells` was the only one
+  the game does not have — it calls them `prisoncells`, and there are 540. The
+  name is what the loot tables key off, so ours were furnished and then spawned
+  nothing. The station leaned on `policestorage` as well, which has two rooms in
+  the whole county.
+
+- **Rooms the size the game builds them** (`knoxbuild/layout.py`). Every room in
+  Knox County, measured by what it is called: a church is 39 tiles at the median
+  but 340 at the ninth decile, a library room 100, a gym 88, a warehouse 134.
+  Held to one size for every building, ours came out as a grid of cubicles where
+  the game has a hall. The cap is by kind now.
+
+- **Buildings you walk round, not through** (`knoxbuild/layout.py`). Only houses
+  ever got circulation, so a school was classrooms opening into one another. A
+  real corridor is cut through a school, a police station or a clinic — the
+  game's halls average 122 tiles in a school, not the 24 of a relabelled room —
+  and only where there are rooms enough to be worth serving. How much is a
+  balance measured both ways: at one extra hall per twelve rooms, 230 doors in
+  300 buildings went bedroom into bedroom; at one per six, a house was a third
+  corridor. One per eight puts a house at 23.3% circulation against the game's
+  23.7%, and bedroom-to-bedroom doors at 120 where the old plan had 771.
+
+- **No two buildings of a kind alike** (`knoxbuild/build.py`). Church, barn and
+  industrial shipped with one wall style each; police, library, fire and
+  barracks had none at all and fell through to the house styles, so a police
+  station could come out in clapboard. Every variant of a kind shared one
+  interior wall besides. Public buildings borrow the civic style, the others
+  take an exterior and an interior from the house styles — whole, so window and
+  door tiles come with them — and a house takes its block's style 55% of the
+  time and its own the rest, which builds a street rather than an estate.
+
+- **Nothing hanging in the air** (`knoxbuild/layout.py`, `knoxbuild/catalog.py`).
+  A piece is drawn with its base part-way up its tile when it is meant to sit on
+  something: a lamp's base is 153 pixels down a 256-pixel tile, a pot plant's
+  151, but a coffee table's top edge is at 172, so 94% of them hovered. The box
+  was the stacking one drawn a quarter of a tile up, where Knox County puts 336
+  of its 338 boxes on the one that sits on the ground. And the sink list was the
+  two that existed when it was written, so the three added in 1.4.3.2 all hung.
+
+- **A .tbx that cannot be written no longer loses a building**
+  (`knoxbuild/catalog.py`). BuildingEd wants a colour for every room name and
+  throws without one. The failure was swallowed as "left out 2 buildings that
+  could not be laid out", which is how a school and a police station vanished
+  from a town without a word. Every room kind is checked for furniture and a
+  colour now.
+
 ## 1.4.4
 
 - **Lamps and pot plants stand on something that reaches them**

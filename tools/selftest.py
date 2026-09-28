@@ -185,17 +185,29 @@ def check_1_3_6(check, out: str, tbx: list[str], pzw_text: str, log: str) -> Non
     # game caps filled containers per room, so one room the size of a factory
     # floor has loot at one end and bare shelves at the other.
     from knoxbuild.settings import Settings as _S
-    biggest = 0
+    # The cap is by what the building is: Knox County's own churches, gyms,
+    # libraries and warehouses are far bigger than a house's rooms, and held
+    # to one size they came out as a grid of cubicles.
+    over = []
     for kind, w, h in (("industrial", 140, 110), ("civic", 200, 200),
-                       ("apartment", 60, 40), (None, 30, 24)):
+                       ("apartment", 60, 40), (None, 30, 24),
+                       ("church", 40, 60), ("library", 40, 30),
+                       ("school", 60, 45)):
         plan = layout.build_building(w, h, commercial=True, seed=3, kind=kind,
                                      levels=1, settings=_S()).storeys[0]
         # Bar the landing of a block of flats, which is a corridor by
         # design and holds nothing worth filling.
-        biggest = max(biggest, max((r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1)
-                                   for r in plan.rooms if not r.is_core))
-    check(0 < biggest <= layout.MAX_ROOM_AREA,
-          f"no room is bigger than the game will fill ({biggest} tiles)")
+        biggest = max((r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1)
+                      for r in plan.rooms if not r.is_core)
+        # The cap is where the splitter stops cutting, not a hard ceiling:
+        # a region it cannot halve again without making a room narrower than
+        # three tiles comes out over. A quarter over is the slack that allows.
+        allowed = layout._room_cap(kind) * 1.25
+        if not 0 < biggest <= allowed:
+            over.append(f"{kind}:{biggest}>{allowed:.0f}")
+    check(not over,
+          f"no room is bigger than the game will fill for its kind "
+          f"({'; '.join(over) or 'none over'})")
 
     rooms = {m for t in texts.values() for m in re.findall(r'InternalName="(\w+)"', t)}
     check("policeoffice" in rooms and "policelocker" in rooms,
@@ -1487,6 +1499,144 @@ def check_overture(check, work: str) -> None:
           "a map that used Overture credits it, and one that did not does not")
 
 
+def check_standing(check) -> None:
+    """Nothing is drawn hanging in the air.
+
+    A piece is drawn with its base part-way up its tile when it is meant to
+    sit on something. The box was the stacking one, drawn a quarter of a tile
+    up, and Knox County puts 336 of its 338 boxes on the one that sits on the
+    ground. The sinks were a list of the two that existed when it was written,
+    so the three added later hung.
+    """
+    from knoxbuild import catalog as C
+    from knoxbuild import layout as L
+
+    missed = [r for r in C.FURNITURE
+              if "sink" in r and C.FURNITURE_LAYERS.get(r, "Furniture") == "Furniture"
+              and not L._needs_surface(r)]
+    check(not missed, f"every sink knows it needs a worktop ({missed or 'all do'})")
+
+    # Every room name we write has to be one the game knows, or nothing
+    # spawns in it. "cells" was the only one that was not: Knox County has 540
+    # prisoncells and no cells at all.
+    from knoxbuild import layout as _L
+    names = set()
+    for spec in _L.SPECIAL_MIXES.values():
+        for part in spec:
+            names.update(part)
+    names.update(_L.COMMERCIAL, _L.COMMERCIAL_FILL, _L.RESIDENTIAL_FILL,
+                 _L.HOUSE_SLEEPING, _L.UPSTAIRS)
+    nostyle = sorted(n for n in names if n not in _L.ROOM_STYLE)
+    check(not nostyle, f"every room a building can hold has furniture for it "
+                       f"({'; '.join(nostyle) or 'all do'})")
+    # BuildingEd wants a colour for every room name and throws without one,
+    # which dropped the school and the police station out of a town silently.
+    nocolour = sorted(n for n in _L.ROOM_STYLE if n not in C.ROOM_COLORS)
+    check(not nocolour, f"and a colour, or the .tbx cannot be written "
+                        f"({'; '.join(nocolour) or 'all do'})")
+    school = set(_L.SPECIAL_MIXES["school"][0]) | set(_L.SPECIAL_MIXES["school"][1])
+    check({"diningroom", "kitchen"} <= school,
+          "a school has a canteen and a kitchen to serve it")
+    check("prisoncells" in set(_L.SPECIAL_MIXES["police"][0]) and "cells" not in names,
+          "a police station has prisoncells, the name the game knows")
+
+    box = C.FURNITURE["crate"]["W"]["0,0"]
+    check(box.endswith(("_016", "_017", "_018", "_019")),
+          f"a box on the floor is the one drawn on the floor ({box})")
+
+    # And a school is walked round, not through: only houses had circulation.
+    from knoxbuild.settings import Settings as _S
+    halls = 0
+    plan = L.build_building(55, 40, levels=1, seed=3, kind="school",
+                            commercial=True, settings=_S()).storeys[0]
+    halls = sum(1 for r in plan.rooms if (r.kind or "") in L.CIRCULATION)
+    check(halls >= 3, f"a school has corridors to reach its classrooms by "
+                      f"({halls} of {len(plan.rooms)} rooms)")
+
+
+def check_wall_styles(check) -> None:
+    """No kind of building is built of one material only.
+
+    Every church in a county was the same church: the special styles shipped
+    one entry each for church, barn and industrial, and police, library, fire
+    and barracks had none at all, so they fell through to the house styles and
+    a police station could come out clapboard. Houses took one style per
+    110-tile block, which built estates rather than streets.
+    """
+    import collections as _c
+    import random as _r
+
+    from knoxbuild import catalog as C
+    from knoxbuild.build import BORROWED_STYLE, pick_style, wall_variants
+    from knoxbuild.settings import Settings as _S
+
+    thin = []
+    for kind in sorted(set(C.SPECIAL_STYLES) | set(BORROWED_STYLE)):
+        got = len(wall_variants(BORROWED_STYLE.get(kind, kind)))
+        if got < 3:
+            thin.append(f"{kind}:{got}")
+    check(not thin, f"every kind of building has three walls to choose from "
+                    f"({'; '.join(thin) or 'all do'})")
+
+    # And inside as well: every variant of a kind used to share one interior
+    # wall, so a county of schools was the same colour indoors.
+    same = []
+    for kind in sorted(set(C.SPECIAL_STYLES) | set(BORROWED_STYLE)):
+        got = wall_variants(BORROWED_STYLE.get(kind, kind))
+        inside = {v["interior"]["tiles"]["West"] for v in got}
+        if len(inside) < 2:
+            same.append(kind)
+    check(not same, f"and more than one wall inside it "
+                    f"({'; '.join(same) or 'all do'})")
+
+    # And a street of houses is not one house repeated.
+    rng, settings = _r.Random(1), _S()
+    seen = _c.Counter()
+    for i in range(120):
+        style = pick_style(None, 100 + (i % 12) * 14, 100 + (i // 12) * 14,
+                           rng, settings, 0.6)
+        seen[style["name"]] += 1
+    check(len(seen) >= 4 and max(seen.values()) < 0.6 * sum(seen.values()),
+          f"and a block of houses is built of several ({len(seen)} over 120 "
+          f"buildings, commonest {max(seen.values())})")
+
+    # A police station is not built like a bungalow.
+    civic = {s["name"] for s in wall_variants("civic")}
+    house = {s["name"] for s in C.HOUSE_STYLES}
+    got = pick_style("police", 500, 500, rng, settings, 0.6)
+    check(got["name"] in civic and got["name"] not in house,
+          f"a police station is built like a public building ({got['name']})")
+
+
+def check_squares(check) -> None:
+    """A public square is paved, not left as grass.
+
+    Two ways a city square went missing. A pedestrian zone was read as a
+    service alley and painted three and a half metres wide, so Madrid's Puerta
+    del Sol - a mesh of pedestrian ways with no polygon anywhere - came out as
+    stripes on a lawn. And an arcade, tagged as a passage through a building,
+    was read as a tunnel and dropped, which took Plaza Mayor with it.
+    """
+    from generator.osm import classify
+    from generator.renderer import ROAD_WIDTHS_M
+
+    check(classify({"highway": "pedestrian"}, area=True) == "plaza"
+          and classify({"highway": "pedestrian", "area": "yes"}) == "plaza"
+          and classify({"place": "square"}) == "plaza",
+          "a pedestrian way that closes on itself is a square")
+    check(classify({"highway": "footway", "covered": "colonnade",
+                    "tunnel": "building_passage"}, area=True) == "plaza",
+          "and so is the colonnade round one, rather than a tunnel")
+    check(classify({"highway": "pedestrian"}) == "pedestrian"
+          and ROAD_WIDTHS_M["pedestrian"] > 2 * ROAD_WIDTHS_M["road_service"],
+          f"a pedestrian street is paved wide, not as a service lane "
+          f"({ROAD_WIDTHS_M['pedestrian']} m against "
+          f"{ROAD_WIDTHS_M['road_service']} m)")
+    check(classify({"highway": "service", "tunnel": "yes"}) is None
+          and classify({"highway": "primary", "tunnel": "building_passage"}) is None,
+          "and a road in a tunnel is still left off the surface")
+
+
 def check_house_plan(check) -> None:
     """A house you walk round, not through.
 
@@ -2101,6 +2251,9 @@ def main(argv: list[str]) -> int:
         check_compile_failures(check, work)
         check_wall_corners(check)
         check_overture(check, work)
+        check_standing(check)
+        check_wall_styles(check)
+        check_squares(check)
         check_house_plan(check)
         check_porch_lights(check, out)
         check_repair(check, out)

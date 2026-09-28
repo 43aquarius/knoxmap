@@ -129,6 +129,25 @@ ROOM_STYLE = {
                     ["bed", "dresser", "bookshelf", "lamp", "shelf", "plant",
                      "painting", "sidetable"]),
     "closet": (C.FLOOR_WOOD, "Closet", ["wardrobe", "shelf", "crate", "wardrobe2"]),
+    # A school canteen: the hall the food is eaten in, with the kitchen that
+    # serves it next door. The tables are the centre group below.
+    "diningroom": (C.FLOOR_TILE_CHECK, "Canteen",
+                   ["counter", "vending", "shelf", "plant", "painting",
+                    "water_cooler"]),
+    "schoollab": (C.FLOOR_TILE_PALE, "Laboratory",
+                  ["counter", "counter", "sink", "shelf", "bookshelf",
+                   "corkboard", "stove"]),
+    "schoolstorage": (C.FLOOR_LINO, "School Storage",
+                      ["shelf", "crate", "metal_rack", "crate", "bookshelf"]),
+    "sportstorage": (C.FLOOR_LINO, "Sports Store",
+                     ["metal_rack", "crate", "shelf", "crate"]),
+    "janitor": (C.FLOOR_LINO, "Janitor",
+                ["shelf", "crate", "sink", "metal_rack"]),
+    "security": (C.FLOOR_LINO, "Security",
+                 ["desk", "office_chair", "corkboard", "filing_cabinet",
+                  "shelf"]),
+    "officestorage": (C.FLOOR_LINO, "Office Storage",
+                      ["shelf", "filing_cabinet", "crate", "metal_rack"]),
     "laundry": (C.FLOOR_TILE_PALE, "Laundry", ["washer", "shelf", "crate", "sink"]),
     "generalstore": (C.FLOOR_TILE_CHECK, "General Store",
                      ["shop_shelf", "shop_shelf_wood", "shop_counter", "shop_fridge_double"]),
@@ -199,7 +218,9 @@ ROOM_STYLE = {
                       ["filing_cabinet", "filing_cabinet", "shelf", "desk", "office_chair"]),
     "interrogationroom": (C.FLOOR_LINO, "Interrogation Room",
                           ["table", "chair", "chair", "mirror"]),
-    "cells": (C.FLOOR_LINO, "Cells", ["bed", "toilet", "sink"]),
+    # Knox County has 540 prisoncells and no "cells" at all - the name is
+    # what the loot tables key off, so ours filled with nothing.
+    "prisoncells": (C.FLOOR_LINO, "Cells", ["bed", "toilet", "sink"]),
     # A fire station: the appliance bay, the gear and the crew's quarters.
     "firegarage": (C.FLOOR_LINO, "Fire Garage",
                    ["metal_rack", "crate", "counter", "shelf"]),
@@ -276,11 +297,16 @@ COMMERCIAL_FILL = ["storage", "office", "storage", "bathroom"]
 # of bedrooms reads as wrong immediately; these keep the interior in character,
 # and the room names drive what loot spawns there.
 SPECIAL_MIXES = {
-    "school":     (["classroom", "classroom", "library", "office", "gym",
-                    "lobby", "bathroom", "storage", "kitchen"],
-                   ["classroom", "office", "storage", "bathroom"]),
+    # The canteen is a kitchen serving a dining hall, which is what a school
+    # is missing without it. schoollab, schoolstorage, sportstorage and
+    # janitor are the game's own school rooms.
+    "school":     (["classroom", "diningroom", "classroom", "gym", "kitchen",
+                    "library", "office", "lobby", "schoollab", "bathroom",
+                    "schoolstorage", "sportstorage"],
+                   ["classroom", "classroom", "classroom", "schoolstorage",
+                    "classroom", "office", "janitor", "bathroom"]),
     "church":     (["church", "lobby", "office", "storage", "bathroom"],
-                   ["church", "storage"]),
+                   ["church", "church", "church", "storage"]),
     "restaurant": (["restaurant", "kitchen", "bar", "storage", "bathroom",
                     "office"],
                    ["restaurant", "storage"]),
@@ -297,9 +323,9 @@ SPECIAL_MIXES = {
     "barn":       (["warehouse", "storage", "garage"], ["warehouse", "storage"]),
     # A base's buildings: army stores (the game's army loot), offices,
     # dormitory rooms, a mess kitchen.
-    "military":   (["armystorage", "office", "armystorage", "bedroom", "bathroom", "kitchen",
-                    "policeoffice"],
-                   ["armystorage", "bedroom", "office"]),
+    "military":   (["armystorage", "office", "bedroom", "armystorage",
+                    "bathroom", "kitchen", "bedroom"],
+                   ["bedroom", "bedroom", "armystorage", "storage", "office"]),
     "shed":       (["shed"], ["shed"]),
     "medical":    (["clinic", "medical", "lobby", "office", "bathroom",
                     "storage"],
@@ -311,15 +337,21 @@ SPECIAL_MIXES = {
     # thing players go to a police station for was not in it. These are the
     # game's own police rooms, which is what puts the uniforms, the evidence
     # and the guns behind the counter.
+    # Knox County's police rooms by how many there are: prisoncells 540,
+    # policeoffice 220, policelocker 27, policegunstorage 15. policestorage
+    # has two in the whole county, so leaning on it filled a station with a
+    # room the game has no loot for.
     "police":     (["policeoffice", "policehall", "policelocker",
-                    "interrogationroom", "policestorage", "bathroom",
+                    "interrogationroom", "prisoncells", "bathroom",
                     "policearchive", "policeoutfitstorage", "policegunstorage",
-                    "cells"],
-                   ["policeoffice", "policestorage", "policelocker"]),
+                    "prisoncells", "security", "breakroom"],
+                   ["prisoncells", "policeoffice", "prisoncells",
+                    "policeoffice", "prisoncells", "policelocker",
+                    "officestorage", "policeoffice", "janitor"]),
     # A library is its reading rooms, not an office block with one in it.
     "library":    (["library", "library", "lobby", "office", "bathroom",
                     "storage", "library"],
-                   ["library", "library", "office"]),
+                   ["library", "library", "library", "storage", "office"]),
     # A fire station: the appliance bay, the gear store and the crew's rooms.
     "fire":       (["firegarage", "firestorage", "office", "bedroom",
                     "kitchen", "bathroom", "firestorage"],
@@ -665,12 +697,15 @@ def _landing(plan: Plan, adj: dict, free: list,
                                     plan.rooms[i - 1].area))
 
 
-# One hall per this many rooms on a floor, at most. A plan cut into a dozen
-# rectangles has no corridor in it anywhere, so the rooms that do not touch
-# the living room or the landing are reached through other rooms however dear
-# that is priced. Turning one of them into circulation is what a real plan
-# does with the space instead.
-ROOMS_PER_HALL = 5
+# One more hall per this many rooms on a floor, on top of the corridor and the
+# landing. It is a balance between two ways of being wrong, and the number was
+# picked by measuring both against Knox County. Too few and rooms chain: at
+# one per twelve, 230 doors in 300 buildings went bedroom into bedroom. Too
+# many and the plan is corridor: at one per six, a house was a third
+# circulation where the game's are a quarter by room. One per eight puts a
+# house at 23.3% of its rooms against the game's 23.7%, and bedroom-to-bedroom
+# doors at 120 where the old plan had 771.
+ROOMS_PER_HALL = 8
 
 
 def _more_halls(plan: Plan, adj: dict, free: list, kinds: dict,
@@ -862,13 +897,82 @@ def _assign_shop_floor(plan: Plan, rng: random.Random, street: str | None,
         rest[-1][1].kind = "bathroom"
 
 
+# At most one room of this kind per this many rooms on a floor. The fill list
+# was cycled round-robin once the mix was spent, so every kind in it ended up
+# with an equal share however silly that was: a school came out with 61
+# lavatories and 58 offices to its 63 classrooms, a police station with seven
+# locker rooms, and a church with as many storerooms as nave. A kind that has
+# had its share is skipped and the next one in the list takes the room.
+ROOM_CAP_PER = {
+    "bathroom": 14, "lobby": 30, "hall": 12, "kitchen": 25, "gym": 25,
+    "breakroom": 25, "office": 7, "storage": 8, "garage": 15,
+    "prisoncells": 10, "interrogationroom": 20, "policearchive": 30,
+    "policegunstorage": 30, "policeoutfitstorage": 30, "policelocker": 15,
+    "policehall": 25, "firegarage": 12, "armystorage": 4, "medical": 4,
+    "clinic": 4, "library": 6, "officestorage": 12, "janitor": 18,
+    "security": 25, "schoolstorage": 12, "sportstorage": 25, "schoollab": 14,
+    "diningroom": 30,
+}
+
+
 def _assign_kinds(rooms: list[Room], mix: list[str], fill: list[str]) -> None:
+    import collections as _c
+
     order = sorted(rooms, key=lambda r: -r.area)
+    total = len(order)
+    used: _c.Counter = _c.Counter()
+
+    def spare(kind: str) -> bool:
+        per = ROOM_CAP_PER.get(kind)
+        return per is None or used[kind] < max(1, total // per)
+
     for i, room in enumerate(order):
-        room.kind = mix[i] if i < len(mix) else fill[(i - len(mix)) % len(fill)]
-    # The smallest room makes a far more convincing bathroom than a hall.
-    if len(order) >= 3 and "bathroom" in mix:
+        if i < len(mix):
+            kind = mix[i]
+        else:
+            # The next entry in the fill that has not had its share; if they
+            # all have, the first one, which is what the building mostly is.
+            start = (i - len(mix)) % len(fill)
+            kind = next((fill[(start + k) % len(fill)] for k in range(len(fill))
+                         if spare(fill[(start + k) % len(fill)])), fill[0])
+        room.kind = kind
+        used[kind] += 1
+    # The smallest room makes a far more convincing bathroom than a hall. It
+    # trades kinds with whatever the mix made the bathroom rather than adding
+    # one, or a nine-room church came out with two lavatories in it.
+    if len(order) >= 3 and "bathroom" in mix and order[-1].kind != "bathroom":
+        swap = next((r for r in order if r.kind == "bathroom"), None)
+        if swap is not None:
+            swap.kind = order[-1].kind
         order[-1].kind = "bathroom"
+
+
+# Buildings you walk through to get somewhere else. A school of classrooms
+# wants a corridor and a police station wants one; a church does not, its nave
+# being the way through, and nor does a warehouse or a shop floor. Only houses
+# got circulation before this, so a school was classrooms opening into one
+# another the way the bedrooms upstairs used to.
+# A floor wants a corridor once it holds about this many rooms; below that
+# the corridor is more of the building than the rooms it serves.
+CORRIDOR_WORTH_IT = 8
+
+
+NEEDS_CORRIDOR = {"school", "police", "civic", "medical", "fire", "military",
+                  "library", "offices"}
+
+
+def _circulation(plan: Plan, rooms: list[Room]) -> int:
+    """Rooms turned into halls until the rest all open onto one."""
+    adj = _neighbours(plan)
+    where = {id(r): i for i, r in enumerate(plan.rooms, 1)}
+    free = [where[id(r)] for r in rooms if (r.kind or "") not in CIRCULATION]
+    seeds = [where[id(r)] for r in rooms if (r.kind or "") in CIRCULATION]
+    kinds: dict[int, str] = {}
+    made = _more_halls(plan, adj, free, kinds, seeds,
+                       len(free) // ROOMS_PER_HALL)
+    for i, kind in kinds.items():
+        plan.rooms[i - 1].kind = kind
+    return made
 
 
 def _renumber(plan: Plan) -> None:
@@ -1388,7 +1492,7 @@ MAX_EXTERIOR_DOORS = 6
 # Two doors closer together than this are one entrance, not two.
 DOORS_APART_TILES = 12
 # Nobody's front door opens into these, and a second one need not either.
-PRIVATE_ROOMS = {"bathroom", "bedroom", "kidsbedroom", "closet", "cells"}
+PRIVATE_ROOMS = {"bathroom", "bedroom", "kidsbedroom", "closet", "prisoncells"}
 
 
 def _more_ways_in(plan: Plan, front: tuple[int, int, str]) -> None:
@@ -2087,6 +2191,10 @@ CENTRE_GROUPS: dict[str, tuple[list[tuple[str, int, int, str]], int]] = {
     # it costs the group a row of clearance and nothing else.
     "kitchen": ([("rug_small", 0, 0, "W"), ("round_table", 1, 0, "W"),
                  ("chair", 0, 0, "W"), ("chair", 2, 0, "E")], 1),
+    # A canteen is rows of long tables, not one table in the middle.
+    "diningroom": ([("dining_table", 1, 1, "W"), ("chair", 0, 1, "W"),
+                    ("chair", 3, 1, "E"), ("chair", 1, 0, "N"),
+                    ("chair", 2, 2, "S")], 10),
     "bedroom": ([("rug_small", 0, 0, "W")], 1),
     "office": ([("dining_table", 0, 1, "W"), ("chair", 0, 0, "N")], 3),
     "library": ([("dining_table", 1, 1, "W"), ("chair", 0, 1, "W"),
@@ -2523,7 +2631,15 @@ def _furnish(plan: Plan, rng: random.Random,
 # own houses have them. Found by the height of their sprites (a floating
 # piece's lowest pixel sits well above the floor diamond); the television is
 # drawn standing, but no home keeps one on the carpet.
-SURFACE_ROLES = {"kitchen_sink", "sink", "lamp", "tv"}
+# Pieces drawn with their base part-way up the tile, so they need something
+# under them. Sinks are matched by name as well: three more were added with
+# the sink variety and every one of them hung in the air, because the set was
+# a list of the two that existed at the time.
+SURFACE_ROLES = {"kitchen_sink", "sink", "lamp", "tv", "register"}
+
+
+def _is_sink(role: str) -> bool:
+    return role.startswith(("sink", "kitchen_sink"))
 WORKTOP_ROOMS = {"kitchen", "bathroom", "laundry", "breakroom"} | KITCHENS
 # Opened from the front: the tile before them is kept clear.
 FRONT_CLEAR_ROLES = {"fridge", "stove", "stove_alt", "washer", "dryer", "wardrobe",
@@ -2536,7 +2652,7 @@ def _needs_front(role: str) -> bool:
 
 
 def _needs_surface(role: str) -> bool:
-    return role in SURFACE_ROLES or role.startswith("erika_plant")
+    return role in SURFACE_ROLES or _is_sink(role) or role.startswith("erika_plant")
 
 
 # Sprite geometry, read off the tiles themselves. A small thing is drawn with
@@ -2576,7 +2692,7 @@ def _stand_on_something(plan: Plan, idx: int, room: Room, palette: dict) -> None
         role, x, y, o = plan.furniture[n]
         if not _needs_surface(role) or (x, y) in standing:
             continue
-        if room.kind in WORKTOP_ROOMS or role.endswith("sink"):
+        if room.kind in WORKTOP_ROOMS or _is_sink(role) or role == "register":
             support = palette.get("counter", "counter")
         elif role == "tv":
             support = "dresser"
@@ -3042,6 +3158,17 @@ def build_building(width: int, height: int, levels: int = 1,
     if kind == "apartment":
         core = _pick_corridor(width, height, mask, rng)
         corridor = core is not None
+    elif kind in NEEDS_CORRIDOR and (
+            width * height >= CORRIDOR_WORTH_IT
+            * (settings.room_size if settings else Settings().room_size)
+            * KIND_ROOM_SCALE.get(kind, 1.0)):
+        # A school or a clinic is rooms off a corridor. In Knox County a
+        # school's halls are 11% of its rooms and 21% of its floor, and they
+        # average 122 tiles: one long one serving a storey, not a dozen square
+        # ones relabelled, which is what read as corridors all the way down.
+        # Only where there are rooms enough to be worth serving - a two-room
+        # library with a corridor through it is a third corridor.
+        core = _pick_corridor(width, height, mask, rng)
     if core is None and levels > 1:
         core = _pick_core(width, height, mask, rng, street)
     if levels > 1 and core is None:
@@ -3154,11 +3281,11 @@ def _stair_foot(stairs: tuple[int, int, str] | None) -> tuple[int, int] | None:
 
 # Rooms scale with what the building is: a warehouse is a few great halls, a
 # church one nave, a school rooms the size of classrooms.
-KIND_ROOM_SCALE = {"industrial": 6.0, "barn": 5.0, "shed": 8.0, "church": 4.0,
-                   "shop": 2.0, "school": 1.6, "civic": 1.5,
+KIND_ROOM_SCALE = {"industrial": 6.0, "barn": 5.0, "shed": 8.0, "church": 12.0,
+                   "shop": 2.0, "school": 5.0, "civic": 2.5,
                    "restaurant": 1.5, "medical": 1.3, "offices": 3.0,
-                   "police": 2.0, "library": 2.5, "fire": 3.0,
-                   "military": 2.0}
+                   "police": 2.0, "library": 8.0, "fire": 4.0,
+                   "military": 4.0}
 # A shop's ground floor is a sales floor or a few: rooms the size of a house's
 # cut a grocery into cupboards no rows of shelving fit in.
 SHOP_FLOOR_SCALE = 4.0
@@ -3176,6 +3303,21 @@ MAX_ROOMS_PER_FLOOR = 90
 # reach it: a 200x200 building needs eleven cuts, and at eight it stopped
 # with rooms of two thousand tiles.
 MAX_ROOM_AREA = 120
+# ...except where the game's own buildings are plainly bigger. Every room in
+# Knox County, by what it is called: a church is 39 tiles at the median but
+# 340 at the ninth decile and 1132 at the largest, which is one nave with
+# small rooms off it; a library room is 100 at the median and 282 at the
+# decile; a gym 88 and 314; a warehouse 134 and 461. Held to 120 whatever the
+# building was, a church and a library came out as a grid of cubicles where
+# the game has a hall. The loot allowance above is the reason for the cap, and
+# these are the buildings the game itself spends it on.
+KIND_MAX_ROOM = {"church": 340, "library": 280, "school": 170, "gym": 320,
+                 "industrial": 460, "barn": 460, "shed": 460, "military": 150,
+                 "civic": 170, "fire": 220, "medical": 140}
+
+
+def _room_cap(kind: str | None) -> int:
+    return KIND_MAX_ROOM.get(kind or "", MAX_ROOM_AREA)
 
 
 def build_plan(width: int, height: int, commercial: bool = False,
@@ -3218,7 +3360,8 @@ def build_plan(width: int, height: int, commercial: bool = False,
     # hundreds of cupboards. However big the building, keep it to a number of
     # rooms a person could walk through.
     floor_tiles = sum(map(sum, mask)) if mask is not None else width * height
-    target = min(max(target, floor_tiles / MAX_ROOMS_PER_FLOOR), MAX_ROOM_AREA)
+    target = min(max(target, floor_tiles / MAX_ROOMS_PER_FLOOR),
+                 _room_cap(mix_kind))
 
     if kind == "apartment":
         _apartment_rooms(plan, rng, target, HOTEL_FRONTAGE if hotel else FLAT_FRONTAGE)
@@ -3246,10 +3389,14 @@ def build_plan(width: int, height: int, commercial: bool = False,
         _assign_shop_floor(plan, rng, street, uses, several=(kind == "retail"))
     elif mix_kind and mix_kind in SPECIAL_MIXES:
         mix, fill = SPECIAL_MIXES[mix_kind]
-        _assign_kinds([r for r in plan.rooms if not r.is_core], mix, fill)
+        rooms = [r for r in plan.rooms if not r.is_core]
+        _assign_kinds(rooms, mix, fill)
+        if mix_kind in NEEDS_CORRIDOR:
+            _circulation(plan, rooms)
     elif commercial:
-        _assign_kinds([r for r in plan.rooms if not r.is_core],
-                      COMMERCIAL, COMMERCIAL_FILL)
+        rooms = [r for r in plan.rooms if not r.is_core]
+        _assign_kinds(rooms, COMMERCIAL, COMMERCIAL_FILL)
+        _circulation(plan, rooms)
     else:
         _assign_house_kinds(plan, level, levels, stairs)
     for room in plan.rooms:

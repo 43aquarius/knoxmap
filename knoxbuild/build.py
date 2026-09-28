@@ -388,6 +388,71 @@ def classify_building(tags: dict) -> str | None:
     return None
 
 
+# A public building has no wall style of its own, so it fell through to the
+# house styles and a police station could come out in clapboard. These borrow
+# another kind's, which is what such a building is built of.
+BORROWED_STYLE = {"police": "civic", "library": "civic", "fire": "civic",
+                  "military": "civic"}
+# Kinds that shipped with a single style, so every church in a county was the
+# same church. The exterior wall is taken from a house style instead, whole -
+# the entry carries its own window and door tiles, so nothing is mixed.
+MORE_WALLS = {
+    "church": ("brick", "stucco", "render", "painted"),
+    "industrial": ("brick", "panel", "stucco"),
+    "barn": ("timber", "panel", "clapboard"),
+}
+# ...and the walls inside. Every variant of a kind shared one interior wall,
+# so a whole county of schools was painted the same colour indoors however
+# many materials the outside came in. The house styles carry nine different
+# ones between them and each is taken whole, window and door tiles with it.
+MORE_INSIDE = {
+    "school": ("brick", "painted", "stucco"),
+    "church": ("timber", "painted", "clapboard"),
+    "civic": ("painted", "stucco", "panel"),
+    "shop": ("painted", "panel"),
+    "apartment": ("brick", "painted", "stucco", "render"),
+    "industrial": ("panel", "stucco"),
+    "barn": ("timber", "panel"),
+    "medical": ("painted", "stucco"),
+    "restaurant": ("painted", "panel"),
+}
+# Of the buildings in a block, how many keep the block's own style. A street
+# built at one time is mostly one material with later infills between; every
+# house in 110 tiles being identical is what read as an estate rather than a
+# street.
+BLOCK_SHARE = 55
+
+
+def wall_variants(kind: str) -> list[dict]:
+    """Every style a building of this kind may be built in."""
+    from . import catalog as C
+
+    base = C.SPECIAL_STYLES[kind]
+    out = list(getattr(C, "SPECIAL_STYLE_VARIANTS", {}).get(kind) or [base])
+    houses = {s["name"]: s for s in C.HOUSE_STYLES}
+    for name in MORE_WALLS.get(kind, ()):
+        donor = houses.get(name)
+        if not donor:
+            continue
+        variant = dict(base)
+        variant["exterior"] = donor["exterior"]
+        variant["name"] = f"{base['name']}_{name}"
+        out.append(variant)
+    inside = [(n, houses[n]["interior"]) for n in MORE_INSIDE.get(kind, ())
+              if n in houses]
+    if inside:
+        grown = []
+        for variant in out:
+            grown.append(variant)
+            for name, entry in inside:
+                other = dict(variant)
+                other["interior"] = entry
+                other["name"] = f"{variant['name']}~{name}"
+                grown.append(other)
+        out = grown
+    return out
+
+
 def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
                settings: Settings, density: float = 0.0) -> dict:
     """Materials for one building: its own if special, else its block's.
@@ -397,8 +462,9 @@ def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
     """
     from . import catalog as C
 
+    kind = BORROWED_STYLE.get(kind or "", kind)
     if kind and kind in C.SPECIAL_STYLES:
-        variants = getattr(C, "SPECIAL_STYLE_VARIANTS", {}).get(kind) or [C.SPECIAL_STYLES[kind]]
+        variants = wall_variants(kind)
         # By the building's own position, so neighbours differ and a rebuild
         # picks the same again.
         return variants[(tile_x * 73856093 ^ tile_y * 19349663) % len(variants)]
@@ -409,6 +475,11 @@ def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
     block = (tile_x // size, tile_y // size)
     # Deterministic per block, so re-running gives the same town.
     idx = (block[0] * 73856093 ^ block[1] * 19349663) % len(styles)
+    # ...and then per building, so a block is a street rather than one house
+    # built over and over.
+    own = (tile_x * 83492791 ^ tile_y * 297121507) & 0x7FFFFFFF
+    if len(styles) > 1 and own % 100 >= BLOCK_SHARE:
+        idx = (own // 100) % len(styles)
     if len(styles) > 1 and rng.random() < settings.style_oddity:
         idx = (idx + 1 + rng.randrange(len(styles) - 1)) % len(styles)
     return styles[idx]
