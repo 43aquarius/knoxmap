@@ -2,6 +2,28 @@
 
 ## 1.4.3.4
 
+- **Lamps and pot plants stand on something that reaches them**
+  (`knoxbuild/layout.py`). A small piece is drawn with its base part-way up its
+  tile and whatever it stands on has to reach that high: a lamp's base is 153
+  pixels down a 256-pixel tile and a pot plant's 151, but a coffee table's top
+  edge is at 172 — so both hung a quarter of a tile above the table put under
+  them. 94% of them were in the air. A bedside chest tops out at 97 and a
+  counter at 125; Knox County stands 180 of its 270 table lamps on
+  `furniture_storage_01` and not one on a low table. A chest goes under them
+  instead, and a low table already on the tile is swapped for one rather than
+  stacked with it.
+
+- **A house you walk round, not through** (`knoxbuild/layout.py`). Every room
+  opened onto every room it touched: the commonest door in a generated town was
+  one bedroom into the next, and 56% of doors joined two rooms you should not
+  have to cross. An upstairs had no circulation at all, because only a lift or
+  stair core was ever made a hall. The room the stairs arrive in is the landing
+  now, and a floor gets one more hall per five rooms until the rest all open
+  onto circulation. A door between two private rooms is priced dearly enough
+  that the plan takes any other way round, bar the pairs a real house has — a
+  bathroom off a bedroom, and the kitchen, dining and living rooms. 56% down to
+  2%, with no room sealed off and corner doors unchanged at 0.05%.
+
 - **Bathrooms the size of bathrooms** (`knoxbuild/layout.py`). A floor is cut
   into rooms of one target size and the bathroom then takes the smallest of
   them, so it came out at 13.7 m² — a bathroom the size of a bedroom, and the

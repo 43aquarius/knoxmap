@@ -1487,6 +1487,69 @@ def check_overture(check, work: str) -> None:
           "a map that used Overture credits it, and one that did not does not")
 
 
+def check_house_plan(check) -> None:
+    """A house you walk round, not through.
+
+    Every room opening onto every room it touches is a warren: the commonest
+    door in a generated town was one bedroom into the next, and an upstairs
+    had no landing at all because only a lift or stair core was ever made a
+    hall. Rooms open onto circulation now, bar the pairs a real house has -
+    a bathroom off a bedroom, and the kitchen, dining and living rooms.
+    """
+    import collections as _c
+
+    from knoxbuild import layout as L
+    from knoxbuild.settings import Settings as _S
+
+    ok_pairs = [{"bedroom", "bathroom"}, {"kidsbedroom", "bathroom"},
+                {"kitchen", "dining"}, {"kitchen", "livingroom"},
+                {"dining", "livingroom"}]
+    doors = through = 0
+    floors = with_circulation = 0
+    floating = 0
+    for seed in range(60):
+        b = L.build_building(10 + seed % 14, 9 + (seed * 7) % 12,
+                             levels=1 + seed % 2, seed=seed, settings=_S())
+        for storey in b.storeys:
+            kinds = [r.kind or "?" for r in storey.rooms]
+            if "kitchen" not in kinds and "bedroom" not in kinds:
+                continue
+            floors += 1
+            with_circulation += any(k in L.CIRCULATION for k in kinds)
+            for x, y, d in storey.doors:
+                a = L._room_at(storey, x, y)
+                o = L._room_at(storey, *((x, y - 1) if d == "N" else (x - 1, y)))
+                if not a or not o or a == o:
+                    continue
+                ka, kb = kinds[a - 1], kinds[o - 1]
+                doors += 1
+                if ka in L.PRIVATE_ROOMS and kb in L.PRIVATE_ROOMS                         and {ka, kb} not in ok_pairs:
+                    through += 1
+            # And nothing standing on a piece too low to reach it: a lamp on a
+            # coffee table hangs a quarter of a tile above it.
+            under = {}
+            for role, x, y, orient in storey.furniture:
+                if L._is_wall_piece(role) or L._needs_surface(role):
+                    continue
+                for cell in L._cells_for(role, x, y, orient):
+                    under[cell] = role
+            for role, x, y, _o in storey.furniture:
+                if not L._needs_surface(role):
+                    continue
+                beneath = under.get((x, y))
+                if beneath is None or beneath in L.LOW_TABLES:
+                    floating += 1
+    share = 100.0 * through / max(doors, 1)
+    check(floors and with_circulation == floors,
+          f"every house floor has a hall, a landing or a living room "
+          f"({with_circulation} of {floors})")
+    check(share <= 20.0,
+          f"and rooms open onto one rather than onto each other "
+          f"({share:.0f}% of doors join two private rooms, was 56%)")
+    check(not floating,
+          f"nothing stands on a piece too low to hold it ({floating})")
+
+
 def check_porch_lights(check, out: str) -> None:
     """A light by the front door of nearly every house.
 
@@ -2038,6 +2101,7 @@ def main(argv: list[str]) -> int:
         check_compile_failures(check, work)
         check_wall_corners(check)
         check_overture(check, work)
+        check_house_plan(check)
         check_porch_lights(check, out)
         check_repair(check, out)
         from knoxbuild.world import Placement, Zone, render_pzw

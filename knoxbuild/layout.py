@@ -640,7 +640,62 @@ HOUSE_SLEEPING = ["bedroom", "kidsbedroom", "bedroom", "office", "storage"]
 UPSTAIRS = ["bedroom", "kidsbedroom", "bedroom", "office", "kidsbedroom", "storage"]
 
 
-def _assign_house_kinds(plan: Plan, level: int, levels: int) -> None:
+# Where you walk when you are not in a room. Knox County's houses have a hall
+# in 42% of them and a living room in nearly all, and everything opens off one
+# or the other; ours had no circulation upstairs at all, so a floor of bedrooms
+# was a chain of them - the commonest door in the whole town was one bedroom
+# into the next.
+CIRCULATION = {"hall", "lobby", "livingroom"}
+
+
+def _landing(plan: Plan, adj: dict, free: list,
+             stairs: tuple[int, int, str] | None) -> int | None:
+    """The room a floor is walked through: where the stairs arrive, or failing
+    that whichever room touches the most others."""
+    if stairs is not None:
+        x, y, d = stairs
+        dx, dy = (0, 1) if d == "N" else (1, 0)
+        for i in range(STAIR_RUN):
+            room = _room_at(plan, x + dx * i, y + dy * i)
+            if room in free:
+                return room
+    if not free:
+        return None
+    return max(free, key=lambda i: (len([n for n in adj.get(i, ()) if n in free]),
+                                    plan.rooms[i - 1].area))
+
+
+# One hall per this many rooms on a floor, at most. A plan cut into a dozen
+# rectangles has no corridor in it anywhere, so the rooms that do not touch
+# the living room or the landing are reached through other rooms however dear
+# that is priced. Turning one of them into circulation is what a real plan
+# does with the space instead.
+ROOMS_PER_HALL = 5
+
+
+def _more_halls(plan: Plan, adj: dict, free: list, kinds: dict,
+                seeds: list[int], cap: int) -> int:
+    """Rooms turned into halls until the rest all open onto one."""
+    made = 0
+    while made < cap and free:
+        covered = set(seeds)
+        for i in seeds:
+            covered |= set(adj.get(i, ()))
+        left = [i for i in free if i not in covered]
+        if not left:
+            break
+        best = max(free, key=lambda i: len([n for n in adj.get(i, ()) if n in left]))
+        if not any(n in left for n in adj.get(best, ())):
+            break
+        kinds[best] = "hall"
+        free.remove(best)
+        seeds.append(best)
+        made += 1
+    return made
+
+
+def _assign_house_kinds(plan: Plan, level: int, levels: int,
+                        stairs: tuple[int, int, str] | None = None) -> None:
     """Rooms of a house, placed by what they sit next to.
 
     Handing kinds out in size order put the kitchen wherever the second-biggest
@@ -682,13 +737,27 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int) -> None:
                                                                   if k == "kitchen"]) else []
         if near:
             take(min(near, key=lambda i: area[i]), "laundry")
+        _more_halls(plan, adj, free, kinds, [living] + [i for i, k in kinds.items()
+                                                        if k == "hall"],
+                    len(free) // ROOMS_PER_HALL)
         dist = _graph_distance(adj, living)
         rest = sorted(free, key=lambda i: -dist.get(i, 99))
         sleeping = HOUSE_SLEEPING if levels == 1 else ["office", "bedroom", "kidsbedroom"]
         for n, i in enumerate(rest):
             kinds[i] = "closet" if area[i] <= SMALL_ROOM_TILES else sleeping[n % len(sleeping)]
     else:
-        take(min(free, key=lambda i: area[i]), "bathroom")
+        # The landing. Without one an upstairs was a row of bedrooms opening
+        # into each other, which is what a plan should never ask you to walk
+        # through. It is taken before the bathroom, which would otherwise take
+        # the smallest room and leave nothing to walk in.
+        landing = _landing(plan, adj, free, stairs)
+        if landing is not None and len(free) >= 3:
+            take(landing, "hall")
+        _more_halls(plan, adj, free, kinds,
+                    [i for i, k in kinds.items() if k == "hall"],
+                    len(free) // ROOMS_PER_HALL)
+        if free:
+            take(min(free, key=lambda i: area[i]), "bathroom")
         for n, i in enumerate(sorted(free, key=lambda i: -area[i])):
             kinds[i] = "closet" if area[i] <= SMALL_ROOM_TILES else UPSTAIRS[n % len(UPSTAIRS)]
 
@@ -1069,6 +1138,20 @@ FRONT_DOOR_COST = {"livingroom": 0.0, "hall": 0.5, "kitchen": 1.5,
                    "bathroom": 12.0, "motelroom": 0.0}
 
 
+# Rooms you sleep, wash or work in. A door between two of them is a room you
+# have to walk through to reach another, which is what made a plan read as a
+# warren rather than a house - the commonest door in a generated town was one
+# bedroom into the next. The one pair a real house does have is a bathroom off
+# a bedroom, and the kitchen, dining room and living room share their walls
+# openly; everything else goes through the hall.
+PRIVATE_ROOMS = {"bedroom", "kidsbedroom", "bathroom", "office", "kitchen",
+                 "dining", "storage", "closet", "laundry"}
+ENSUITE = ({"bedroom", "bathroom"}, {"kidsbedroom", "bathroom"})
+# Dear enough that the tree takes any other way round, cheap enough that a
+# room with no other wall to open on is still reached rather than sealed.
+PRIVATE_PAIR_COST = 24.0
+
+
 def _door_cost(a: str, b: str) -> float:
     kinds = {a, b}
     if "hall" in kinds or "lobby" in kinds:
@@ -1077,12 +1160,14 @@ def _door_cost(a: str, b: str) -> float:
         cost = 1.5
     elif "livingroom" in kinds:
         cost = 3.0
+    elif kinds in ENSUITE:
+        cost = 4.0
+    elif kinds <= PRIVATE_ROOMS:
+        cost = PRIVATE_PAIR_COST
     else:
         cost = 6.0
-    if "bathroom" in kinds and not kinds & {"hall", "lobby", "bedroom"}:
+    if "bathroom" in kinds and not kinds & {"hall", "lobby", "bedroom", "kidsbedroom"}:
         cost += 6.0
-    if a == b == "bedroom":
-        cost += 8.0
     return cost
 
 
@@ -2454,18 +2539,39 @@ def _needs_surface(role: str) -> bool:
     return role in SURFACE_ROLES or role.startswith("erika_plant")
 
 
+# Sprite geometry, read off the tiles themselves. A small thing is drawn with
+# its base part-way up its 256-pixel tile, and whatever it stands on has to
+# reach that high or it hangs in the air: a lamp's base is 153 pixels down and
+# a pot plant's 151, a bedside chest's top edge is at 97 and a counter's at
+# 125, but a coffee table's is at 172. A lamp on a coffee table floated a
+# quarter of a tile above it. Knox County stands 180 of its 270 table lamps on
+# furniture_storage_01, a bedside chest, and not one of them on a low table.
+LOW_TABLES = {"table", "sidetable", "coffee_table"}
+# What goes under one instead. Both of these are tiles the game itself puts
+# lamps on (furniture_storage_01 8 and 12).
+NIGHTSTANDS = ("dresser", "dresser_alt")
+
+
 def _stand_on_something(plan: Plan, idx: int, room: Room, palette: dict) -> None:
-    """A counter, a cabinet or a small table under every piece of this room
-    that needs one and does not have one."""
+    """A counter, a chest or a table under every piece of this room that needs
+    one and does not have one - and a taller one under anything left standing
+    on a piece too low to reach it."""
     standing: set[tuple[int, int]] = set()
+    low: dict[tuple[int, int], int] = {}
     mine = []
     for n, (role, x, y, o) in enumerate(plan.furniture):
         if _room_at(plan, x, y) != idx or _is_wall_piece(role):
             continue
         mine.append(n)
-        if not _needs_surface(role):
-            standing.update(_cells_for(role, x, y, o))
-    added = []
+        if _needs_surface(role):
+            continue
+        cells = _cells_for(role, x, y, o)
+        if role in LOW_TABLES:
+            for cell in cells:
+                low[cell] = n
+        else:
+            standing.update(cells)
+    added, swapped = [], []
     for n in mine:
         role, x, y, o = plan.furniture[n]
         if not _needs_surface(role) or (x, y) in standing:
@@ -2475,11 +2581,19 @@ def _stand_on_something(plan: Plan, idx: int, room: Room, palette: dict) -> None
         elif role == "tv":
             support = "dresser"
         else:
-            support = "table"
+            support = NIGHTSTANDS[(x + y) % len(NIGHTSTANDS)]
         if support not in C.FURNITURE:
             continue
-        added.append((n, (support, x, y, _facing(support, o))))
+        # A lamp already sitting on a coffee table: the table goes, the chest
+        # takes its place, rather than two pieces on the one tile.
+        under = low.pop((x, y), None)
+        if under is not None:
+            swapped.append((under, (support, x, y, _facing(support, o))))
+        else:
+            added.append((n, (support, x, y, _facing(support, o))))
         standing.add((x, y))
+    for n, piece in swapped:
+        plan.furniture[n] = piece
     # Each support goes in just before its piece, so it is drawn underneath.
     for n, piece in sorted(added, reverse=True):
         plan.furniture.insert(n, piece)
@@ -3137,7 +3251,7 @@ def build_plan(width: int, height: int, commercial: bool = False,
         _assign_kinds([r for r in plan.rooms if not r.is_core],
                       COMMERCIAL, COMMERCIAL_FILL)
     else:
-        _assign_house_kinds(plan, level, levels)
+        _assign_house_kinds(plan, level, levels, stairs)
     for room in plan.rooms:
         if room.is_core:
             room.kind = "hall"
