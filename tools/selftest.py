@@ -1499,6 +1499,63 @@ def check_overture(check, work: str) -> None:
           "a map that used Overture credits it, and one that did not does not")
 
 
+def check_kitchen_fit(check) -> None:
+    """A kitchen is fitted out the way Knox County fits one out.
+
+    Measured over its 672 kitchens (median 21 m2): 1.0 sink, 1.0 fridge, 1.2
+    cooking appliances and 3.9 pieces of the counter tileset, which includes
+    the wall cupboards - they are fixtures_counters_01_024-027. Ours filled
+    both long walls end to end and then hung cupboards above that, for 7.1,
+    put a microwave over every one of them for 1.8 cooking appliances, and had
+    a washing machine in 80% of kitchens against the game's 16%.
+    """
+    import collections as _collections
+    import random as _random
+
+    from knoxbuild import layout as _L
+    from knoxbuild.settings import Settings as _Settings
+
+    groups = {
+        "sink": lambda r: "sink" in r,
+        "cooking": lambda r: r.startswith(("stove", "oven", "microwave")),
+        "fridge": lambda r: r.startswith("fridge"),
+        "counter": lambda r: r.startswith("counter") or "cabinet" in r,
+        "washer": lambda r: r.startswith(("washer", "dryer")),
+    }
+    # (at least, at most) per kitchen. The counter band is wide at the top
+    # because a sink that does not land in a run gets one slid under it, on
+    # the sink's own square - an extra piece but not an extra worktop.
+    want = {"sink": (0.8, 1.3), "cooking": (0.9, 1.4), "fridge": (0.8, 1.2),
+            "counter": (3.0, 5.6), "washer": (0.0, 0.35)}
+
+    rng = _random.Random(7)
+    seen = _collections.Counter()
+    kitchens = 0
+    for _ in range(200):
+        w, h = rng.randrange(9, 20), rng.randrange(9, 20)
+        b = _L.build_building(w, h, levels=1, seed=rng.randrange(1 << 20),
+                              kind="house", commercial=False,
+                              settings=_Settings())
+        for storey in b.storeys:
+            for room in storey.rooms:
+                if room.kind != "kitchen":
+                    continue
+                kitchens += 1
+                for role, x, y, _o in storey.furniture:
+                    if not (room.x0 <= x <= room.x1
+                            and room.y0 <= y <= room.y1):
+                        continue
+                    for name, test in groups.items():
+                        if test(role):
+                            seen[name] += 1
+    check(kitchens > 50, f"{kitchens} kitchens to measure")
+    for name, (lo, hi) in want.items():
+        per = seen[name] / max(1, kitchens)
+        check(lo <= per <= hi,
+              f"a kitchen has {per:.1f} {name} per room, the game's is "
+              f"{ {'sink': 1.0, 'cooking': 1.2, 'fridge': 1.0, 'counter': 3.9, 'washer': 0.2}[name] }")
+
+
 def check_standing(check) -> None:
     """Nothing is drawn hanging in the air.
 
@@ -2378,6 +2435,7 @@ def main(argv: list[str]) -> int:
         check_wall_corners(check)
         check_overture(check, work)
         check_standing(check)
+        check_kitchen_fit(check)
         check_wall_styles(check)
         check_squares(check)
         check_house_plan(check)

@@ -1,5 +1,74 @@
 # Changelog
 
+## Unreleased
+
+- **Kitchens fitted the way the game fits them** (`knoxbuild/layout.py`).
+  Counters filled both long walls end to end and cupboards were hung above
+  that, for 7.1 pieces of the counter tileset against Knox County's 3.9 over
+  672 kitchens; the figure this was first tuned against, 12 per 10 m2, was
+  every piece of furniture in the room rather than the counters. Counters and
+  cupboards now share one budget scaled to the floor. A microwave went over
+  every cupboard, for 1.8 cooking appliances against the game's 1.2, and is
+  now the exception it is there. The washing machine came off the wishlist
+  proper, which placed one in 80% of kitchens against the game's 16%.
+
+- **A town is not made of one shelf** (`knoxbuild/catalog.py`,
+  `knoxbuild/layout.py`). One sprite, `furniture_shelving_01_001-004`, was on
+  nearly every room's list in every house and came to 3.9% of all the
+  furniture in a town. Knox County spreads its 2,028 household shelving tiles
+  over about a dozen styles, its most-used single shelf being 12% of them. Two
+  more styles, their facings read off the vanilla map the way the porch lights
+  were and confirmed at 84-95% over 27 to 77 sightings each. Down to 1.9%.
+
+- **Rooms the size the building wants them** (`knoxbuild/layout.py`). A pass
+  added to stop a police cell coming out at 24 m2, where Knox County's are 15,
+  was applied to every kind of room and quietly became what set room size
+  everywhere: it cut a school's halls to 43 m2 and its offices to 48 however
+  large the floor had been divided, and no room-size setting could move it. It
+  now only touches the rooms that want to be small. A school floor went from
+  22 rooms to 12 and its median room from 42 m2 to 105.
+
+- **The clocks** (`knoxbuild/layout.py`, `knoxbuild/catalog.py`).
+  location_community_school_01_32-35 is the commonest thing in the game's
+  classrooms and stands against a wall in 93-95% of 800 sightings, so it was
+  added as a school desk. It is a wall clock, and a school came out with 765
+  of them. Taken out again; a classroom is tables and chairs until the real
+  desk in that tileset is identified.
+
+- **Floors reach the rooms that never had them** (`knoxbuild/tbx.py`). A
+  style's floor overrode every room in the building, so a block of flats had
+  one carpet over its bathrooms and its kitchens alike and a school a shop
+  tile throughout - and none of the per-room floors applied to them at all.
+  The style's floor is the fallback now. Knox County gives a bathroom 18
+  different floors and a kitchen 35.
+
+- **A police station, not a house with cells** (`knoxbuild/layout.py`). Its
+  corridor used the house wishlist and its reception the house lobby: 8.2 side
+  tables, 6.9 chests and a sofa to a building. Workplaces have their own list
+  now, and a lamp stands on a filing cabinet. The room mix is a lobby,
+  offices, interrogation, lockers, an armoury with gun lockers, an evidence
+  room and a few cells - offices fell from 36% of the building to 13%.
+
+- **Flats that are flats** (`knoxbuild/layout.py`). A flat was cut towards the
+  building's room size rather than a flat's, so 117 m2 of floor became six
+  rooms. 40% are open plan now - one room that is kitchen and living room
+  both, which is how the game does 44% of its own - 37% are not rectangles,
+  and rooms reached only by walking through another fell from 29% to 20%.
+  Bathrooms are dead ends: 95% have exactly one door.
+
+- **Wall clutter** (`knoxbuild/layout.py`, `knoxbuild/tbx.py`). Measured
+  against Knox County, per 10 m2: interior trim 2.43 against 0.25, corkboards
+  in schools 0.24 against none at all, light switches 0.27 against 0.12, rugs
+  in corridors 1.49 against 0.08. All brought to the game's own rates, and
+  workplaces hang no pictures.
+
+- **Room names the game knows** (`knoxbuild/layout.py`). Houses called their
+  dining room "dining", which Knox County has 11 of against 694 "diningroom" -
+  the loot tables key off the name, so ours spawned nothing. Closets and
+  laundries were never built at all: the rule that makes a small room a closet
+  needed one of 8 tiles or under, and the splitter cannot make a room smaller
+  than 9, so it had never once fired.
+
 ## 1.4.6
 
 - **A map is not empty because a server said nothing** (`generator/osm.py`).
