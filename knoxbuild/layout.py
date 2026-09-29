@@ -2137,6 +2137,13 @@ ART_FREE_KINDS = {"police", "civic", "school", "medical", "fire",
 # Tiles of floor per piece of furniture, where a room is not the usual 4.
 ROOM_DENSITY = {"classroom": 2, "secondaryclassroom": 2, "schoollab": 2,
                 "library": 3, "prisoncells": 3}
+# Warehouse fittings. A house keeps none of them: its box room had a steel
+# rack and a packing crate in it, which is a stockroom, not a cupboard under
+# the stairs. Barns and sheds are outbuildings and may keep theirs.
+WAREHOUSE_ROLES = {"metal_rack", "crate"}
+HOME_KINDS = {None, "house", "apartment"}
+# What a home puts in a box room instead.
+HOME_STORE = {"metal_rack": "shelf", "crate": "dresser"}
 CIVIC_KINDS = {"police", "civic", "school", "medical", "fire", "military",
                "library"}
 CIVIC_ROOMS = {
@@ -3070,8 +3077,14 @@ def _furnish(plan: Plan, rng: random.Random,
             base = list(CIVIC_ROOMS[r.kind])
         shelving = [s for s in SHELVING.get(r.kind, DEFAULT_SHELVING)
                     if s in C.FURNITURE] or ["shelf"]
+        if plan.kind in HOME_KINDS:
+            # No warehouse racking in somebody's house.
+            keep = [s for s in shelving if s not in WAREHOUSE_ROLES]
+            shelving = keep or ["shelf"]
         base = [rng.choice(shelving) if role == "shelf" else pal.get(role, role)
                 for role in base]
+        if plan.kind in HOME_KINDS:
+            base = [HOME_STORE.get(role, role) for role in base]
         if _erika_ready():
             # With Erika's Tiles installed, pictures and plants come from its
             # far larger range, so no two living rooms hang the same print.

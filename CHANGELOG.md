@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.4.7
+
+- **No warehouse racking in a house** (`knoxbuild/layout.py`). A house's box
+  room, laundry and closet were furnished out of the storage list, which is
+  steel shelving and packing crates: a stockroom, not a cupboard under the
+  stairs. Homes and flats keep none of it now and get shelving and a chest
+  instead; sheds, barns and warehouses still have theirs. There was already a
+  check for this - it looked at living rooms and bedrooms and not at the three
+  rooms the racking was actually in, and it now looks at every room a house
+  has.
 
 - **Kitchens fitted the way the game fits them** (`knoxbuild/layout.py`).
   Counters filled both long walls end to end and cupboards were hung above

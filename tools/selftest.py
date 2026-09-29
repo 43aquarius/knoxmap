@@ -1003,8 +1003,12 @@ def check_facing(check) -> None:
     # home put warehouse wire racking in people's bathrooms.
     from collections import Counter as _Counter
 
+    # Every room a house has, not just the ones you sit in: the box room and
+    # the laundry were left out of this, and that is exactly where the steel
+    # racking and the packing crates were sitting.
     indoors = {"livingroom", "bedroom", "kidsbedroom", "kitchen", "bathroom",
-               "dining", "hall"}
+               "dining", "diningroom", "hall", "storage", "laundry", "closet",
+               "office", "openplan"}
     industrial = {"metal_rack", "crate", "shop_shelf", "shop_aisle"}
     strays = _Counter()
     for i in range(48):
