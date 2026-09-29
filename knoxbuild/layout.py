@@ -815,6 +815,14 @@ def _stagger_flats(plan: Plan, rng: random.Random) -> None:
             gained = units.get(to, []) + [give]
             if not _contiguous(gained, adj):
                 continue
+            # Touching is not enough: the flat has to be able to put a door
+            # between them. A room joined across two tiles of wall could not
+            # be reached from its new flat's front door, so the door tree
+            # fell through to its last resort and joined two flats together
+            # or gave one of them a second front door - 175 and 89 of them.
+            if max((adj[give].get(n, 0) for n in units.get(to, ())),
+                   default=0) < MIN_SPLIT:
+                continue
             plan.rooms[give - 1].unit = to
             units[unit] = left
             units[to] = gained
@@ -1769,7 +1777,11 @@ def _doors(plan: Plan, rng: random.Random) -> None:
                     if ra.unit and rb.unit:
                         if relax < 3:
                             continue
-                    elif flat in front and relax < 2:
+                    elif flat in front and relax < 3:
+                        # A flat has one front door. This was relaxed a
+                        # pass earlier, and every room that could not be
+                        # reached any other way opened its own way onto the
+                        # corridor - 101 flats with two or three of them.
                         continue
                 spot = _door_spot(wall, min_run, rng)
                 if spot is None:
@@ -1793,7 +1805,7 @@ def _doors(plan: Plan, rng: random.Random) -> None:
                 # runs when the alternative is a room with no door at all.
                 if any(rooms[i - 1].kind == "bathroom" and doors_of.get(i)
                        for i in (a, b)):
-                    if relax < 3:
+                    if relax < 2:
                         continue
                     # Last pass: allowed, but dearer than anything else on
                     # the board, so it happens only where a room would
@@ -2971,9 +2983,13 @@ def _furnish(plan: Plan, rng: random.Random,
         # switch beside its door was dark everywhere else - "lighting seems
         # somewhat broken". A big room gets a switch every so often, spread
         # out along its walls, the way a real shop is wired.
-        share = (SWITCH_SHARE_CIVIC if plan.kind in CIVIC_KINDS
-                 else SWITCH_SHARE_HOME)
-        floor_switch = 1 if rng.random() < share else 0
+        # Every room keeps one. The game lights a room from the switch in
+        # it, so a room without one is dark whatever the sprite count says -
+        # tools/audit_layouts.py fails a plan for it. Thinning these out to
+        # match Knox County's 0.12 per 10 m2 left 1,945 rooms unlit, and it
+        # was chasing the wrong thing anyway: the round fittings that read as
+        # clocks were school_desk, not these.
+        floor_switch = 1
         want_switches = max(floor_switch,
                             min(MAX_SWITCHES,
                                 r.area // LIGHT_EVERY_TILES))

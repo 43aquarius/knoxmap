@@ -2,6 +2,17 @@
 
 ## 1.4.7
 
+- **Rooms reachable, lit, and one flat to a front door**
+  (`knoxbuild/layout.py`). Making a bathroom a dead end pushed whatever it
+  had blocked into the door tree's last resort, and that pass is allowed to
+  join two flats together: 246 doors between neighbouring dwellings and 101
+  flats with two or three front doors of their own. The bathroom rule gives
+  way a pass earlier now and the one-front-door rule holds to the last, which
+  leaves bathrooms dead ends in 96% of cases and neither of the other two at
+  all. Light switches are back in every room - the game lights a room from
+  the switch inside it, so a room without one is dark whatever the sprite
+  count says, and 1,945 rooms had none.
+
 - **No warehouse racking in a house** (`knoxbuild/layout.py`). A house's box
   room, laundry and closet were furnished out of the storage list, which is
   steel shelving and packing crates: a stockroom, not a cupboard under the
