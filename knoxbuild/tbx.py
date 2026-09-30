@@ -196,6 +196,9 @@ def _add(entries: list[dict], entry: dict | None) -> int:
 # one building where an ordinary house has a dozen. It gets one per room kind
 # instead, out of the whole list.
 INTERIOR_WALLS_PER_BUILDING = 4
+# One per storey for a mall concourse, so the ground floor seen through the
+# atrium is plainly a different floor from the gallery you are standing on.
+CONCOURSE_FLOORS = ("tile_cream", "tile_grey", "civic_pale", "tile_white")
 WALLS_PER_KIND = {"mall": 99}
 # run to 0.25 pieces of walls_interior_detailing per 10 m2 and ours to 2.43
 # with every room trimmed, so about one kind in ten keeps it.
@@ -370,6 +373,18 @@ def render_tbx(plan: Plan | Building, name: str,
         entries.append(C.floor_entry(pick_rng.choice(options)))
         room_floor[kind] = len(entries)
 
+    # A mall's concourse runs the same floor on every storey in Knox County,
+    # which reads as one surface when two of them are in view at once and the
+    # opening is all that tells them apart. Each storey gets its own here, so
+    # a glance down the atrium shows which floor is which.
+    storey_floor: dict[int, int] = {}
+    if any(r.kind == "concourse" for r in building.rooms):
+        for level in range(len(storeys)):
+            name_ = CONCOURSE_FLOORS[level % len(CONCOURSE_FLOORS)]
+            entries.append(C.floor_entry(name_))
+            storey_floor[level] = len(entries)
+    level_of = {id(r): lvl for lvl, st in enumerate(storeys) for r in st.rooms}
+
     # Interior walls, room by room. InteriorWall has always been a per-room
     # attribute here and every room was given the same one, so a building was
     # one colour throughout however many its style could have used. Knox
@@ -477,7 +492,10 @@ def render_tbx(plan: Plan | Building, name: str,
              C.INTERIOR_WALL_TRIM if room.kind in trimmed else 0),
             # A room with a floor of its own first, then the style's, then
             # the room kind's own default.
-            ("Floor", room_floor.get(room.kind) or floor_override or floor_idx),
+            ("Floor",
+             (storey_floor.get(level_of.get(id(room)), 0)
+              if room.kind == "concourse" else 0)
+             or room_floor.get(room.kind) or floor_override or floor_idx),
             ("GrimeFloor", 0),
             ("GrimeWall", 0),
             # A concourse has no ceiling: it is open to the storey above, and
@@ -503,6 +521,14 @@ def render_tbx(plan: Plan | Building, name: str,
         # The railing round the hole in this floor, one run per edge. A wall
         # object overrides what the room adjacency would have drawn, which is
         # how the shop glass below works too.
+        # Nothing at all where an escalator arrives: a wall object with no
+        # tile on it, which is what stops the exterior wall coming back.
+        for x, y, d in sorted(storey.open_edge):
+            out.append("  <object" + _attrs([
+                ("type", "wall"), ("length", 1), ("InteriorTile", 0),
+                ("ExteriorTrim", 0), ("InteriorTrim", 0), ("x", x), ("y", y),
+                ("dir", "N" if d == "W" else "W"), ("Tile", 0)]) + "/>")
+
         if storey.railing and rail_idx:
             for x, y, d in sorted(storey.railing):
                 rail_attrs = [("type", "wall"), ("length", 1),

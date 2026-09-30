@@ -1173,7 +1173,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # into the building (knoxbuild/catalog.escalator_tiles).
         for ex, ey in escalators:
             from . import catalog as _C
-            escalator_squares.extend(_C.escalator_tiles(x0 + ex, y0 + ey))
+            escalator_squares.extend(_C.escalator_tiles(x0 + ex, y0 + ey,
+                                                          west=True))
         p = Placement(f"buildings/{fname}", x0, y0, w, h)
         placements.append(p)
         peopled.append((x0, y0, fp.mask, storeys, special or "house"))

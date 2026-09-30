@@ -11615,12 +11615,31 @@ ESCALATOR_UP = [
 ]
 ESCALATOR_W, ESCALATOR_H = 3, 6
 
+# The same thing running the other way, off Muldraugh 16_37 at (208,245).
+# It is a different block of the sheet entirely - 0-5, 16-21, 24-29 against
+# 8-13, 32-45 - not the north-south one turned round, which is why it had to
+# be read rather than derived. It climbs west, so dx grows away from the top.
+ESCALATOR_WEST = [
+    (0, 0, 1, 24), (1, 0, 1, 25),
+    (0, 1, 1, 5),
+    (0, 2, 1, 16), (1, 2, 1, 17),
+    (1, 0, 0, 26), (2, 0, 0, 27), (3, 0, 0, 28), (4, 0, 0, 29),
+    (1, 1, 0, 2), (2, 1, 0, 1), (3, 1, 0, 0), (4, 1, 0, 3), (5, 1, 0, 4),
+    (2, 2, 0, 19), (3, 2, 0, 20), (4, 2, 0, 21),
+]
+ESCALATOR_WEST_W, ESCALATOR_WEST_H = 6, 3
 
-def escalator_tiles(x: int, y: int, base_level: int = 0) -> list:
-    """One escalator at (x, y), as (x, y, level, layer, tile) squares."""
+
+def escalator_tiles(x: int, y: int, base_level: int = 0,
+                    west: bool = False) -> list:
+    """One escalator at (x, y), as (x, y, level, layer, tile) squares.
+
+    `west` is the one that runs along the building rather than across it; its
+    (x, y) is the end that lands on the upper floor either way.
+    """
     return [(x + dx, y + dy, base_level + dz, "Floor",
              f"fixtures_escalators_01_{n}")
-            for dx, dy, dz, n in ESCALATOR_UP]
+            for dx, dy, dz, n in (ESCALATOR_WEST if west else ESCALATOR_UP)]
 
 
 RAILING_TILES = {"West": "fencing_01_002", "North": "fencing_01_001",

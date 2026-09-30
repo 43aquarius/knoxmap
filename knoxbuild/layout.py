@@ -92,6 +92,11 @@ class Plan:
     # floor below across a railing, not a glazed wall. tbx.py draws these as
     # wall runs of fencing.
     railing: set = field(default_factory=set)
+    # Edges of the hole that carry nothing at all - where an escalator
+    # arrives. Taking the railing off is not enough: with no wall object on
+    # it the edge falls back to the building's exterior wall, and the way off
+    # the escalator came out bricked up.
+    open_edge: set = field(default_factory=set)
     # The stair shaft, as (x0, y0, x1, y1) inclusive, identical on every
     # storey of a building. Painted last so it is always exactly one room.
     core: tuple[int, int, int, int] | None = None
@@ -4430,12 +4435,12 @@ def _setback(width: int, height: int, mask, levels: int, core, shaft,
 
 
 def _place_escalators(building: "Building") -> None:
-    """A pair of escalators into the atrium, beside the stairs.
+    """A pair of escalators along the atrium, off the end of the concourse.
 
-    They run north and climb as they go - the one orientation read off the
-    game's own - so the top two squares have to land on the gallery along the
-    north side of the hole and the rest drops into the opening. Nothing is
-    placed where that will not fit.
+    They run the length of the opening rather than across it, so they sit in
+    the hole instead of bridging it, and the top lands on the floor that wraps
+    the end of the concourse. The railing is taken off wherever one arrives,
+    or the way off it is fenced.
     """
     if len(building.storeys) < 2:
         return
@@ -4444,23 +4449,50 @@ def _place_escalators(building: "Building") -> None:
         return
     rows = sorted({y for x, y in upper.void})
     cols = sorted({x for x, y in upper.void})
-    if not rows or not cols:
+    if len(rows) < C.ESCALATOR_WEST_H or len(cols) < C.ESCALATOR_WEST_W:
         return
-    top = rows[0]                       # first row of the hole
-    ay = top - 2                        # the two landing squares, on the gallery
-    if ay < 0 or ay + C.ESCALATOR_H - 1 >= building.height:
+    # The top square sits on the floor just west of the opening; the run
+    # goes east into it.
+    ax = cols[0] - 1
+    ay = rows[0] + (len(rows) - (2 * C.ESCALATOR_WEST_H - 1)) // 2
+    if ax < 0 or ay < rows[0] or ay + 2 * C.ESCALATOR_WEST_H - 2 > rows[-1]:
+        ay = rows[0]
+    if ax + C.ESCALATOR_WEST_W - 1 > cols[-1]:
         return
-    core = building.storeys[0].core
-    cx = core[0] if core else building.width // 2
-    for dx in (-8, 6, -14, 12):
-        ax = cx + dx
-        if ax < 1 or ax + 2 * C.ESCALATOR_W >= building.width:
+    pair = [(ax, ay)]
+    second = ay + C.ESCALATOR_WEST_H - 1
+    if second + C.ESCALATOR_WEST_H - 1 <= rows[-1]:
+        pair.append((ax, second))
+    building.escalators = pair
+    _clear_railing_at(building, pair)
+
+
+def _clear_railing_at(building: "Building", pair: list) -> None:
+    """Take the railing off the squares an escalator arrives on.
+
+    The rail runs the whole edge of the opening, the landing included, which
+    fenced off the one thing it is there to reach.
+    """
+    # Only where it arrives - the squares it puts on the upper floor - not
+    # the whole length of it. Clearing the lot took six tiles of railing out
+    # of each side and left the opening unfenced along the escalator well.
+    taken = set()
+    for ax, ay in pair:
+        for dx, dy, dz, _n in C.ESCALATOR_WEST:
+            if dz == 1:
+                taken.add((ax + dx, ay + dy))
+    for storey in building.storeys:
+        if not storey.railing:
             continue
-        if not all(x in cols for x in range(ax, ax + 2 * C.ESCALATOR_W)):
-            continue
-        # Two side by side, as the game builds them.
-        building.escalators = [(ax, ay), (ax + C.ESCALATOR_W, ay)]
-        return
+        keep, opened = set(), set()
+        for x, y, d in storey.railing:
+            if ((x, y) in taken or (x - 1, y) in taken
+                    or (x, y - 1) in taken):
+                opened.add((x, y, d))
+            else:
+                keep.add((x, y, d))
+        storey.railing = keep
+        storey.open_edge |= opened
 
 
 def _shop_doors(plan: "Plan", street: str | None) -> None:

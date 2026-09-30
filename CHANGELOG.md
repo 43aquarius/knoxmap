@@ -2,6 +2,21 @@
 
 ## 1.4.8
 
+- **Escalators along the opening, and a floor you can tell from the other**
+  (`knoxbuild/catalog.py`, `knoxbuild/layout.py`, `knoxbuild/tbx.py`). The
+  east-west escalator is a different block of the sheet from the north-south
+  one - 0-5, 16-21 and 24-29 against 8-13 and 32-45, not the same thing
+  turned round - so it was read off Muldraugh 16_37 the same way the first
+  was. They run the length of the atrium now and stand in it rather than
+  bridging it. The railing comes off where one arrives: only off the squares
+  it puts on the upper floor, because clearing its whole footprint took six
+  tiles of rail out of each side of the well. And taking the rail off is not
+  enough on its own - an edge with no wall object on it falls back to the
+  building's exterior wall, so the way off the escalator came out bricked up;
+  those edges carry a wall with no tile at all. Knox County runs one floor
+  through every storey of its mall, which reads as a single surface when two
+  of them are in view at once, so each storey has its own here.
+
 - **Escalators into the atrium** (`knoxbuild/catalog.py`,
   `knoxbuild/layout.py`, `knoxbuild/build.py`). A pair of them beside the
   stairs, read square by square off the game's own (Muldraugh 54_22, the pair
