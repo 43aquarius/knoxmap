@@ -394,6 +394,12 @@ def render_tbx(plan: Plan | Building, name: str,
         room_wall[kind] = (palette[i % len(palette)] if want >= len(kinds_here)
                            else pick_rng.choice(palette))
 
+    # Every tile entry has to be in the table before the table is written:
+    # one added later indexes past the end of it.
+    rails = any(st.railing for st in storeys)
+    rail_idx = _add(entries, C.RAILING) if rails else 0
+    rail_ext_idx = _add(entries, C.RAILING_EXT) if rails else 0
+
     out.append(f"<building{_attrs(building_attrs)}>")
 
     for entry in entries:
@@ -493,6 +499,18 @@ def render_tbx(plan: Plan | Building, name: str,
                      ("x", x), ("y", y), ("dir", direction),
                      ("Tile", store_door if shop_door else C.DOOR)]
             out.append(f"  <object{_attrs(attrs)}/>")
+
+        # The railing round the hole in this floor, one run per edge. A wall
+        # object overrides what the room adjacency would have drawn, which is
+        # how the shop glass below works too.
+        if storey.railing and rail_idx:
+            for x, y, d in sorted(storey.railing):
+                rail_attrs = [("type", "wall"), ("length", 1),
+                              ("InteriorTile", rail_idx), ("ExteriorTrim", 0),
+                              ("InteriorTrim", 0), ("x", x), ("y", y),
+                              ("dir", "N" if d == "W" else "W"),
+                              ("Tile", rail_ext_idx)]
+                out.append(f"  <object{_attrs(rail_attrs)}/>")
 
         if level == 0:
             for d, fixed, start, length in runs:

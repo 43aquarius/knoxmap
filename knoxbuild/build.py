@@ -810,11 +810,12 @@ def _make_one(job: tuple) -> tuple:
     except Exception:  # noqa: BLE001
         import traceback
         return (0, 0, 0, f"{os.path.basename(path)} ({kind or 'house'}, {w}x{h}, "
-                         f"{levels} storeys): {traceback.format_exc()}")
+                         f"{levels} storeys): {traceback.format_exc()}", [])
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return (len(plan.storeys), len(plan.rooms),
-            sum(len(s.furniture) for s in plan.storeys), None)
+            sum(len(s.furniture) for s in plan.storeys), None,
+            list(plan.escalators))
 
 
 # Below this many buildings, starting worker processes costs more than it saves.
@@ -1160,11 +1161,19 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     # writing the files - depends only on each building's own seed, so it runs
     # across processes: a 4,000-building district took three minutes on one.
     failed_buildings = []
+    escalator_squares: list = []
     for (fname, label, x0, y0, w, h, fp, px, special, measured, commercial,
-         style, mask, real_name), (storeys, rooms, furniture, error) in zip(decided, _make_all(jobs)):
+         style, mask, real_name), (storeys, rooms, furniture, error,
+                                   escalators) in zip(decided, _make_all(jobs)):
         if error:
             failed_buildings.append(error)
             continue
+        # A mall's escalators stand in its atrium and carry two tiles on some
+        # squares, so they are packed as their own lot rather than written
+        # into the building (knoxbuild/catalog.escalator_tiles).
+        for ex, ey in escalators:
+            from . import catalog as _C
+            escalator_squares.extend(_C.escalator_tiles(x0 + ex, y0 + ey))
         p = Placement(f"buildings/{fname}", x0, y0, w, h)
         placements.append(p)
         peopled.append((x0, y0, fp.mask, storeys, special or "house"))
@@ -1207,6 +1216,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     from .structures import pack_loose
     light_placements = pack_loose(bdir, map_name, "lights", porch_lights,
                                   on_top=True)
+    escalator_placements = pack_loose(bdir, map_name, "escalators",
+                                      escalator_squares, on_top=True)
 
     # Pumps on a forecourt at each petrol station, including those mapped as
     # a point with no building of their own.
@@ -1252,7 +1263,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     from .structures import build_structures
     structure_placements, raised = build_structures(out_dir, map_name, bdir)
     placements = (placements + fence_placements + structure_placements +
-                  pump_placements + prop_placements + light_placements)
+                  pump_placements + prop_placements + light_placements
+                  + escalator_placements)
 
     pzw_path = os.path.join(out_dir, f"{map_name}.pzw")
     with open(pzw_path, "w", encoding="utf-8") as f:

@@ -11591,6 +11591,49 @@ def _all_interior_walls() -> list[dict]:
 
 INTERIOR_WALLS = _all_interior_walls()
 
+# The railing round a gallery over a mall floor: fencing_01, the black metal
+# rail (the same one generator/structures.py rails its bridges with). Written
+# as a wall run, so it reads as a balcony edge rather than a glazed wall.
+# BuildingEd wants a wall object's own Tile out of exterior_walls and its
+# InteriorTile out of interior_walls, so the railing is registered as both.
+# One escalator, read square by square off Knox County's own mall (Muldraugh
+# 54_22, the pair at x117-121 y153-158) rather than guessed at from tile
+# numbers. Offsets are (dx, dy) from the top of the run, which is the end that
+# lands on the upper floor; it climbs northwards, so dy grows downwards to the
+# floor below. Two of its squares carry a second tile, which is why this
+# cannot go through the .tbx's own loose-tile layer - that writes one tile to
+# a square - and is packed as its own lot instead, the way the bridges are.
+ESCALATOR_UP = [
+    # (dx, dy, level, tile number in fixtures_escalators_01)
+    (0, 0, 1, 45), (1, 0, 1, 13), (2, 0, 1, 37),
+    (0, 1, 1, 44), (2, 1, 1, 36),
+    (0, 1, 0, 43), (1, 1, 0, 10),
+    (0, 2, 0, 42), (1, 2, 0, 9), (2, 2, 0, 34),
+    (0, 3, 0, 41), (1, 3, 0, 8), (2, 3, 0, 33),
+    (0, 4, 0, 40), (1, 4, 0, 12), (2, 4, 0, 32),
+    (1, 5, 0, 11),
+]
+ESCALATOR_W, ESCALATOR_H = 3, 6
+
+
+def escalator_tiles(x: int, y: int, base_level: int = 0) -> list:
+    """One escalator at (x, y), as (x, y, level, layer, tile) squares."""
+    return [(x + dx, y + dy, base_level + dz, "Floor",
+             f"fixtures_escalators_01_{n}")
+            for dx, dy, dz, n in ESCALATOR_UP]
+
+
+RAILING_TILES = {"West": "fencing_01_002", "North": "fencing_01_001",
+                 "NorthWest": "fencing_01_003", "SouthEast": "fencing_01_003",
+                 "WestWindow": "fencing_01_002", "NorthWindow": "fencing_01_001",
+                 "WestDoor": "fencing_01_002", "NorthDoor": "fencing_01_001"}
+RAILING_EXT = {"category": "exterior_walls", "tiles": dict(RAILING_TILES)}
+RAILING = {"category": "interior_walls",
+           "tiles": {"West": "fencing_01_002", "North": "fencing_01_001",
+                     "NorthWest": "fencing_01_003", "SouthEast": "fencing_01_003",
+                     "WestWindow": "fencing_01_002", "NorthWindow": "fencing_01_001",
+                     "WestDoor": "fencing_01_002", "NorthDoor": "fencing_01_001"}}
+
 
 # Materials for buildings OSM tags as something particular.
 SPECIAL_STYLES = {'school': {'name': 'school',

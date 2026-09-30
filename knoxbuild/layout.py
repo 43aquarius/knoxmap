@@ -88,6 +88,10 @@ class Plan:
     # no room, which is how BuildingEd leaves a square with no floor, and
     # tbx.py counts them as built-over so the storey below is not roofed.
     void: set = field(default_factory=set)
+    # The edges of that hole, as (x, y, "W"|"N"): a gallery looks over the
+    # floor below across a railing, not a glazed wall. tbx.py draws these as
+    # wall runs of fencing.
+    railing: set = field(default_factory=set)
     # The stair shaft, as (x0, y0, x1, y1) inclusive, identical on every
     # storey of a building. Painted last so it is always exactly one room.
     core: tuple[int, int, int, int] | None = None
@@ -1533,6 +1537,11 @@ MALL_ARM_MIN = 5
 MALL_ARM_MAX = 8
 MALL_ARM_EVERY = 26
 MALL_ARMS_MAX = 3
+# How far the hole stops short of each end of the spine. The concourse wraps
+# round both ends of the opening, which is what joins the two galleries and
+# keeps the stairs reachable - so nothing has to bridge the hole and the
+# railing runs round one clean opening instead of round each bay.
+MALL_HOLE_END = 6
 
 
 def _mall_rooms(plan: Plan, rng: random.Random, target: int,
@@ -1594,22 +1603,23 @@ def _mall_rooms(plan: Plan, rng: random.Random, target: int,
         a0 = max(0, min(length - arm, c - arm // 2))
         if not spans or a0 > spans[-1][1] + MIN_ROOM:
             spans.append((a0, a0 + arm - 1))
-    bridged = {a for a0, a1 in spans for a in range(a0, a1 + 1)}
-
     # The spine, all the way across.
     hole = band - 2 * MALL_GALLERY
-    open_middle = level > 0 and hole >= 3
+    lo_end, hi_end = MALL_HOLE_END, length - 1 - MALL_HOLE_END
+    open_middle = level > 0 and hole >= 3 and hi_end - lo_end >= MIN_ROOM
     if open_middle:
         put(0, start, length - 1, start + MALL_GALLERY - 1, "concourse", True)
         put(0, start + band - MALL_GALLERY, length - 1, start + band - 1,
             "concourse", True)
-        for a0, a1 in spans:
-            put(a0, start + MALL_GALLERY, a1, start + band - MALL_GALLERY - 1,
-                "concourse", True)
+        # The concourse carries on round both ends of the opening, which is
+        # what the galleries walk round to reach each other.
+        put(0, start + MALL_GALLERY, lo_end - 1,
+            start + band - MALL_GALLERY - 1, "concourse", True)
+        put(hi_end + 1, start + MALL_GALLERY, length - 1,
+            start + band - MALL_GALLERY - 1, "concourse", True)
         for b in range(start + MALL_GALLERY, start + band - MALL_GALLERY):
-            for a in range(length):
-                if a not in bridged:
-                    plan.void.add((a, b) if along_x else (b, a))
+            for a in range(lo_end, hi_end + 1):
+                plan.void.add((a, b) if along_x else (b, a))
     else:
         put(0, start, length - 1, start + band - 1, "concourse", True)
 
@@ -1623,8 +1633,24 @@ def _mall_rooms(plan: Plan, rng: random.Random, target: int,
             put(a0, lo, a1, hi, "concourse", True)
             edge = a1 + 1
         cut(edge, lo, length - 1, hi)
-    if plan.void:
-        _bridge_core(plan, along_x)
+    # The stairs stand in the middle of the building, which is the middle of
+    # the concourse, which is where the hole is: left alone they are a landing
+    # in mid-air. The core keeps its floor and a walkway of concourse runs
+    # from it out to the nearer gallery. Both come out of the hole, and the
+    # walkway is a room of its own or it would have no floor either.
+    if plan.void and plan.core:
+        cx0, cy0, cx1, cy1 = plan.core
+        a0, a1, b0, b1 = ((cx0, cx1, cy0, cy1) if along_x
+                          else (cy0, cy1, cx0, cx1))
+        lo = start + MALL_GALLERY
+        hi = start + band - MALL_GALLERY - 1
+        if lo <= b1 and b0 <= hi:
+            near_top = (b0 - lo) <= (hi - b1)
+            wb0, wb1 = (lo, b0 - 1) if near_top else (b1 + 1, hi)
+            put(a0, wb0, a1, wb1, "concourse", True)
+            for a in range(a0, a1 + 1):
+                for b in range(min(wb0, b0), max(wb1, b1) + 1):
+                    plan.void.discard((a, b) if along_x else (b, a))
 
 
 # What may stand on the concourse: what its own wishlist puts there, plus the
@@ -1689,6 +1715,68 @@ def _bridge_core(plan: Plan, along_x: bool) -> None:
         for x in span:
             for y in range(cy0, cy1 + 1):
                 plan.void.discard((x, y))
+
+
+def _atrium_railings(plan: Plan) -> None:
+    """Rail the edge of the hole, and take the windows off it.
+
+    A gallery's inner edge borders the hole, which is nothing, and nothing
+    reads as outdoors: it was given an exterior wall with windows in it -
+    glazing over a two-storey opening inside the building. It gets a railing
+    instead, which is what a balcony over a mall floor has.
+    """
+    if not plan.void:
+        return
+    h, w = len(plan.grid), len(plan.grid[0])
+
+    def room_at(x, y):
+        return plan.grid[y][x] if 0 <= x < w and 0 <= y < h else 0
+
+    for x, y in plan.void:
+        # The square west of the hole, and the one north of it, each carry
+        # the edge between them on the hole's own square.
+        if room_at(x - 1, y) and (x - 1, y) not in plan.void:
+            plan.railing.add((x, y, "W"))
+        if room_at(x + 1, y) and (x + 1, y) not in plan.void:
+            plan.railing.add((x + 1, y, "W"))
+        if room_at(x, y - 1) and (x, y - 1) not in plan.void:
+            plan.railing.add((x, y, "N"))
+        if room_at(x, y + 1) and (x, y + 1) not in plan.void:
+            plan.railing.add((x, y + 1, "N"))
+    # The windows themselves are placed later, over the whole building
+    # (_place_windows), which skips these edges; nothing is on them yet here.
+
+
+def _merge_concourse(plan: Plan) -> None:
+    """Make the whole concourse one room, so no wall runs across it.
+
+    The spine, the galleries and the arms are cut as separate rectangles, and
+    a wall appears wherever two rooms meet - which walled the concourse off
+    from its own arms and made the hall read as a row of corridors. They all
+    become one room here. Its rectangle is the whole box they cover, which
+    furnishing is safe with: everything that fills a room checks the grid for
+    the tiles that are really its own.
+    """
+    first = next((i for i, r in enumerate(plan.rooms, start=1)
+                  if r.kind == "concourse"), None)
+    if first is None:
+        return
+    rest = [i for i, r in enumerate(plan.rooms, start=1)
+            if r.kind == "concourse" and i != first]
+    if not rest:
+        return
+    keep = plan.rooms[first - 1]
+    for i in rest:
+        room = plan.rooms[i - 1]
+        keep.x0, keep.y0 = min(keep.x0, room.x0), min(keep.y0, room.y0)
+        keep.x1, keep.y1 = max(keep.x1, room.x1), max(keep.y1, room.y1)
+        room.kind = None
+    drop = set(rest)
+    for y, row in enumerate(plan.grid):
+        for x, v in enumerate(row):
+            if v in drop:
+                row[x] = first
+    _renumber(plan)
 
 
 def _merge_halls(plan: Plan) -> int:
@@ -2869,6 +2957,11 @@ def _place_windows(building: "Building", kind: str | None,
             return True
 
         def add(edge):
+            # Never across the hole in a mall floor. That edge is a railing
+            # over the concourse below, and glazing it put windows in mid-air
+            # inside the building.
+            if edge in storey.railing:
+                return
             storey.windows.append(edge)
             placed.append(edge)
 
@@ -3835,6 +3928,11 @@ class Building:
     storeys: list[Plan] = field(default_factory=list)
     # Per storey below the top: where its staircase rises from.
     stairs: list[tuple[int, int, str]] = field(default_factory=list)
+    # Where a mall's escalators stand, in this building's own tiles: the top
+    # of the run, the end that lands on the upper floor. They are packed as
+    # their own lot (knoxbuild/structures.pack_loose), not written into this
+    # .tbx, because a square of one carries two tiles.
+    escalators: list[tuple[int, int]] = field(default_factory=list)
 
     @property
     def rooms(self) -> list[Room]:
@@ -4278,6 +4376,8 @@ def build_building(width: int, height: int, levels: int = 1,
     # Windows last and for the whole building at once, so they stack in
     # columns instead of each floor scattering its own.
     _place_windows(building, kind, shop_ground=shops)
+    if kind == "mall":
+        _place_escalators(building)
     # Last of all, because it is the furnished building that has to be
     # walkable, not the plan.
     _clear_the_way(building)
@@ -4327,6 +4427,40 @@ def _setback(width: int, height: int, mask, levels: int, core, shaft,
     if sum(map(sum, upper)) < SETBACK_MIN_KEEP * sum(map(sum, base)):
         return None, 0
     return upper, round(levels * SETBACK_SHARE)
+
+
+def _place_escalators(building: "Building") -> None:
+    """A pair of escalators into the atrium, beside the stairs.
+
+    They run north and climb as they go - the one orientation read off the
+    game's own - so the top two squares have to land on the gallery along the
+    north side of the hole and the rest drops into the opening. Nothing is
+    placed where that will not fit.
+    """
+    if len(building.storeys) < 2:
+        return
+    upper = building.storeys[1]
+    if not upper.void:
+        return
+    rows = sorted({y for x, y in upper.void})
+    cols = sorted({x for x, y in upper.void})
+    if not rows or not cols:
+        return
+    top = rows[0]                       # first row of the hole
+    ay = top - 2                        # the two landing squares, on the gallery
+    if ay < 0 or ay + C.ESCALATOR_H - 1 >= building.height:
+        return
+    core = building.storeys[0].core
+    cx = core[0] if core else building.width // 2
+    for dx in (-8, 6, -14, 12):
+        ax = cx + dx
+        if ax < 1 or ax + 2 * C.ESCALATOR_W >= building.width:
+            continue
+        if not all(x in cols for x in range(ax, ax + 2 * C.ESCALATOR_W)):
+            continue
+        # Two side by side, as the game builds them.
+        building.escalators = [(ax, ay), (ax + C.ESCALATOR_W, ay)]
+        return
 
 
 def _shop_doors(plan: "Plan", street: str | None) -> None:
@@ -4485,6 +4619,9 @@ def build_plan(width: int, height: int, commercial: bool = False,
             _circulation(plan, rooms)
         if mix_kind in MERGE_CIRCULATION:
             _merge_halls(plan)
+        if mix_kind == "mall":
+            _merge_concourse(plan)
+            _atrium_railings(plan)
     elif commercial:
         rooms = [r for r in plan.rooms if not r.is_core]
         _assign_kinds(rooms, COMMERCIAL, COMMERCIAL_FILL)

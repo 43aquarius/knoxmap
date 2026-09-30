@@ -2,6 +2,30 @@
 
 ## 1.4.8
 
+- **Escalators into the atrium** (`knoxbuild/catalog.py`,
+  `knoxbuild/layout.py`, `knoxbuild/build.py`). A pair of them beside the
+  stairs, read square by square off the game's own (Muldraugh 54_22, the pair
+  at x117-121 y153-158) rather than guessed at from tile numbers: three
+  columns by six rows across two storeys, panels 40-45, treads 8-13, the far
+  panel 32-37. Two of its squares carry a second tile, which the .tbx's own
+  loose-tile layer cannot hold - that writes one tile to a square - so they
+  are packed as their own lot the way the bridges and monuments are. Only the
+  northward run is placed: that is the one orientation measured.
+
+- **One opening, railed, with nothing standing in it**
+  (`knoxbuild/layout.py`, `knoxbuild/tbx.py`). The hole was cut in bays with
+  a walkway crossing between them, which left floor inside the railed run.
+  It stops short of each end of the spine instead and the concourse wraps
+  round both ends, which is what joins the galleries and keeps the stairs
+  reachable - so nothing bridges the opening. The whole concourse is one room
+  now: spine, galleries and arms were separate rectangles and a wall appears
+  wherever two rooms meet, which walled the hall off from its own arms. The
+  gallery edge is railed rather than glazed: it borders the hole, and nothing
+  reads as outdoors, so it had been given an exterior wall with windows in
+  it. The window pass skips those edges at the point windows are added -
+  filtering them earlier did nothing, because windows are placed later over
+  the whole building.
+
 - **Every unit in a mall its own colour** (`knoxbuild/catalog.py`,
   `knoxbuild/tbx.py`). Knox County's mall paints 117 different interior wall
   tiles into the one building, where ours managed 27 - each unit is let to
