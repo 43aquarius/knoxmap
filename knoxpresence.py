@@ -329,12 +329,17 @@ def idle() -> None:
     presence.set(IDLE_TEXT)
 
 
-def stage(name: str, map_name: str = "") -> None:
-    """Publish one pipeline stage. Safe to call from a worker thread."""
+def stage(name: str) -> None:
+    """Publish one pipeline stage. Safe to call from a worker thread.
+
+    The stage and nothing else. The map is named after the place somebody is
+    building, which is often where they live, and that is not something to put
+    on a friends list.
+    """
     if name in STAGE_CLEARS:
         idle()
         return
     text = STAGE_TEXT.get(name)
     if not text:
         return
-    presence.set(text, map_name or None)
+    presence.set(text)

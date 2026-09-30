@@ -317,7 +317,7 @@ def _set_progress(map_name: str, **fields) -> None:
     if "stage" in fields:
         try:
             import knoxpresence
-            knoxpresence.stage(str(fields["stage"]), map_name)
+            knoxpresence.stage(str(fields["stage"]))
         except Exception:  # noqa: BLE001 - presence is never worth a failure
             pass
 

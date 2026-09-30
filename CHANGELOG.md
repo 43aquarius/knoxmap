@@ -23,7 +23,9 @@
   all until a map started and went blank again the moment one finished -
   which is most of the time the window is open, and it read as broken.
   KnoxMap says "Planning a map" from the moment the window opens and the
-  three build lines replace it while a map runs. It is on by default now and
+  three build lines replace it while a map runs. The map's name is not on
+  there: it is named after the place somebody is building, which is often
+  where they live. It is on by default now and
   the switch in the header is gone; `"discord_presence": false` in
   `knoxmap_config.json` or `KNOXMAP_NO_DISCORD=1` still turns it off.
 
