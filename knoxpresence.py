@@ -63,20 +63,21 @@ def app_id() -> str:
 
 
 def enabled() -> bool:
-    """Whether to publish presence at all. Off unless asked for.
+    """Whether to publish presence at all. On, unless it is turned off.
 
-    Presence tells everyone on your friends list what you are doing, which is
-    not a thing to switch on for somebody without asking, so it is opt-in and
-    needs an application id to publish as.
+    It needs an application id to publish as. Presence does tell everyone on
+    your friends list what you are doing, so there are two ways out of it
+    without a switch in the window: "discord_presence": false in
+    knoxmap_config.json, and KNOXMAP_NO_DISCORD=1.
     """
     if os.environ.get("KNOXMAP_NO_DISCORD"):
         return False
     if not app_id():
         return False
     try:
-        return bool(knoxpaths.load_config().get("discord_presence", False))
-    except Exception:  # noqa: BLE001
-        return False
+        return knoxpaths.load_config().get("discord_presence", True) is not False
+    except Exception:  # noqa: BLE001 - no config yet is the default
+        return True
 
 
 def _pipe_paths():
@@ -124,10 +125,46 @@ class _Pipe:
                 continue
             try:
                 self._send(_HANDSHAKE, {"v": 1, "client_id": client_id})
-                return True
+                op, data = self._read()
             except OSError:
                 self.close()
+                continue
+            # Discord answers the handshake with READY, or closes the socket
+            # with the reason - an application id that does not exist, say.
+            # Nothing used to read this, so a connection that had already been
+            # refused looked live and every update went into the dark.
+            if op == _FRAME and (data or {}).get("evt") == "READY":
+                return True
+            log.debug("discord refused the handshake: %s", data)
+            self.close()
         return False
+
+    def _read(self) -> tuple[int | None, dict | None]:
+        """The next frame, or (None, None). Discord answers every command, so
+        this does not wait for something that is not coming."""
+        head = self._recv(8)
+        if len(head) < 8:
+            return None, None
+        op, length = struct.unpack("<II", head)
+        body = self._recv(length) if length else b""
+        try:
+            return op, json.loads(body.decode("utf-8"))
+        except ValueError:
+            return op, None
+
+    def _recv(self, want: int) -> bytes:
+        out = b""
+        while len(out) < want:
+            if self._f is not None:
+                chunk = self._f.read(want - len(out))
+            elif self._sock is not None:
+                chunk = self._sock.recv(want - len(out))
+            else:
+                raise OSError("not connected")
+            if not chunk:
+                break
+            out += chunk
+        return out
 
     def _send(self, op: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -146,6 +183,15 @@ class _Pipe:
             "nonce": str(uuid.uuid4()),
             "args": {"pid": os.getpid(), "activity": activity},
         })
+        # Read what it made of it. An activity Discord will not show - a
+        # rate limit, a field it does not like - comes back as an error here
+        # and is worth a line in the log; without this the only symptom is a
+        # profile that never changes.
+        op, data = self._read()
+        if op is None:
+            raise OSError("discord closed the connection")
+        if (data or {}).get("evt") == "ERROR":
+            log.debug("discord refused the activity: %s", (data or {}).get("data"))
 
     def close(self) -> None:
         for handle in (self._f, self._sock):
@@ -268,14 +314,25 @@ STAGE_TEXT = {
     "compile": "Compiling",
     "install": "Compiling",
 }
-# The run is over: show nothing rather than leave "Compiling" up all evening.
+# What it says with the window open and no map building. Without this there
+# was no presence at all except during a run, so somebody who switched it on
+# between maps saw nothing happen and reported it as broken - which is most of
+# the time the window is open.
+IDLE_TEXT = "Planning a map"
+
+# The run is over: back to idle rather than leaving "Compiling" up all evening.
 STAGE_CLEARS = {"done", "stopped", "stopping", "error"}
+
+
+def idle() -> None:
+    """The window is open and no map is building."""
+    presence.set(IDLE_TEXT)
 
 
 def stage(name: str, map_name: str = "") -> None:
     """Publish one pipeline stage. Safe to call from a worker thread."""
     if name in STAGE_CLEARS:
-        presence.clear()
+        idle()
         return
     text = STAGE_TEXT.get(name)
     if not text:

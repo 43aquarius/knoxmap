@@ -142,7 +142,22 @@ jobs:
                 # the launcher workflow. It is not in the repository as a
                 # binary, and it is no use on Linux or macOS.
                 cp KnoxMap.exe pack/windows/KnoxMap/
-                (cd pack/windows && zip -qr "$GITHUB_WORKSPACE/KnoxMap-$v-windows.zip" KnoxMap)
+                # KnoxMap.exe goes in last, and nothing may follow it.
+                # Updaters up to 1.4.7.1 unpack a release in the order its
+                # entries are stored and stop dead at the first file Windows
+                # will not let them overwrite - which is this one, the file a
+                # virus scanner holds open (#9). Stored last, everything else
+                # is already in place when that happens, the fixed updater
+                # among it, and a launcher left a version behind still finds
+                # Python and starts KnoxMap. Without this an old copy was
+                # stranded: half the release in, CHANGELOG.md among it, so it
+                # read as the new version and never tried again.
+                out="$GITHUB_WORKSPACE/KnoxMap-$v-windows.zip"
+                (cd pack/windows && zip -qr "$out" KnoxMap -x 'KnoxMap/KnoxMap.exe')
+                (cd pack/windows && zip -q "$out" KnoxMap/KnoxMap.exe)
+                last=$(unzip -Z1 "$out" | grep -v '/$' | tail -1)
+                [ "$last" = "KnoxMap/KnoxMap.exe" ] ||
+                  { echo "KnoxMap.exe must be the last entry, got $last"; exit 1; }
                 ;;
               *)
                 rm -f "pack/$system/KnoxMap"/*.bat

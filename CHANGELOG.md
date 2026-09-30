@@ -2,6 +2,38 @@
 
 ## 1.4.8
 
+- **The copies stranded by the old updater update themselves after all**
+  (`.github/workflows/release.yml`). 1.4.7.1 fixed the unpacking, but the
+  updater doing the unpacking is the one already on the PC, so a copy on
+  1.4.7 or earlier still had the broken one and could not be reached by it.
+  An updater that old walks a release in the order its files are stored and
+  stops at the first one Windows will not let it overwrite - KnoxMap.exe,
+  held open by the virus scanner that takes an interest in it (#9) - and
+  everything after that point was left at the old version. KnoxMap.exe is
+  stored last now, so the whole release is already in place when that
+  happens, the fixed updater with it, and the only thing left behind is a
+  launcher that still works. Measured on a real 1.4.7 install running its own
+  updater with the file held open: updater.py, app.py and knoxpresence.py
+  were all left behind before, and all land now. The release stops rather
+  than publishing if the file is not last.
+
+- **Rich Presence is on, and on while nothing is building**
+  (`knoxpresence.py`, `app.py`, `knoxmap.py`, `templates/index.html`). The
+  presence was only ever set from the build progress, so it showed nothing at
+  all until a map started and went blank again the moment one finished -
+  which is most of the time the window is open, and it read as broken.
+  KnoxMap says "Planning a map" from the moment the window opens and the
+  three build lines replace it while a map runs. It is on by default now and
+  the switch in the header is gone; `"discord_presence": false` in
+  `knoxmap_config.json` or `KNOXMAP_NO_DISCORD=1` still turns it off.
+
+- **The Discord handshake is read** (`knoxpresence.py`). Nothing read
+  Discord's side of the conversation, so a connection Discord had already
+  refused - an application id it does not know - looked live and every update
+  went into the dark. The handshake now has to come back READY before the
+  socket counts as open, and a rejected activity is written to the log
+  instead of being a profile that silently never changes.
+
 - **Towers are towers** (`generator/structures.py`, `generator/osm.py`). A
   water tower, a lighthouse, a windmill, a clock tower: `classify_building`
   has no kind for any of them, so every one was ordinary housing - thinned

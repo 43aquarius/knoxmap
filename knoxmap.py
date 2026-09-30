@@ -74,6 +74,14 @@ def main() -> int:
     if not wait_for(port):
         raise RuntimeError("the local server did not start within 20 seconds")
     updater.check_in_background()
+    # The window is up: say so on Discord, if it was asked to. Everything in
+    # knoxpresence fails quietly and on its own thread, so a Discord that is
+    # closed, restarting or refusing the socket costs the window nothing.
+    try:
+        import knoxpresence
+        knoxpresence.idle()
+    except Exception as exc:  # noqa: BLE001 - presence is never worth a failure
+        knoxlog.log.debug("discord presence: %s", exc)
 
     url = f"http://127.0.0.1:{port}/"
     if in_a_browser():
