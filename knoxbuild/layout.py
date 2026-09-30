@@ -380,6 +380,19 @@ SPECIAL_MIXES = {
                     "bathroom", "kitchen", "bedroom"],
                    ["bedroom", "bedroom", "armystorage", "storage", "office"]),
     "shed":       (["shed"], ["shed"]),
+    # A castle is a great hall with a chapel, a kitchen that fed everybody and
+    # the rooms people slept in, and today a ticket desk and a gift counter by
+    # the door. Every name here is one the game furnishes; "throne room" would
+    # look right and spawn nothing, the loot tables keying off the name.
+    "castle":     (["hall", "church", "kitchen", "storage", "bedroom",
+                    "library", "office", "bathroom", "generalstore"],
+                   ["hall", "bedroom", "storage", "hall"]),
+    # A ground: the concourse under the stand, the changing rooms and showers
+    # off it, the kit store, a first aid room and the club offices. The food
+    # is a counter on the concourse, which is what cafe is.
+    "stadium":    (["hall", "lockerroom", "bathroom", "sportstorage", "cafe",
+                    "office", "clinic", "gym", "storage", "lockerroom"],
+                   ["hall", "lockerroom", "sportstorage", "storage"]),
     "medical":    (["clinic", "medical", "lobby", "office", "bathroom",
                     "storage"],
                    ["clinic", "medical", "storage"]),
@@ -3998,7 +4011,10 @@ def _stair_foot(stairs: tuple[int, int, str] | None) -> tuple[int, int] | None:
 
 # Rooms scale with what the building is: a warehouse is a few great halls, a
 # church one nave, a school rooms the size of classrooms.
+# A great hall and a concourse are big rooms; neither building is cut into
+# bedsits.
 KIND_ROOM_SCALE = {"industrial": 6.0, "barn": 5.0, "shed": 8.0, "church": 12.0,
+                   "castle": 8.0, "stadium": 11.0,
                    "shop": 2.0, "school": 9.0, "civic": 2.5,
                    "restaurant": 1.5, "medical": 1.3, "offices": 3.0,
                    "police": 2.0, "library": 8.0, "fire": 4.0,
@@ -4030,7 +4046,11 @@ MAX_ROOM_AREA = 120
 # these are the buildings the game itself spends it on.
 KIND_MAX_ROOM = {"church": 340, "library": 280, "school": 170, "gym": 320,
                  "industrial": 460, "barn": 460, "shed": 460, "military": 150,
-                 "civic": 170, "fire": 220, "medical": 140}
+                 "civic": 170, "fire": 220, "medical": 140,
+                 # A great hall and a concourse. Without an entry here the cap
+                 # is MAX_ROOM_AREA whatever KIND_ROOM_SCALE says, which is
+                 # why no room-size setting moved either of these.
+                 "castle": 340, "stadium": 460}
 
 
 def _room_cap(kind: str | None) -> int:

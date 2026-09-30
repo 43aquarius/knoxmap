@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.4.8
+
+- **Towers are towers** (`generator/structures.py`, `generator/osm.py`). A
+  water tower, a lighthouse, a windmill, a clock tower: `classify_building`
+  has no kind for any of them, so every one was ordinary housing - thinned
+  like a house, grown like a house and furnished with a sofa and two
+  bedrooms. They are built as what they are now, the way an obelisk already
+  was, and taken off the building list: a shaft rising from the footprint,
+  and for a water tower the tank spread back out over the legs. `man_made`
+  towers were never downloaded at all unless the mapper also tagged
+  `building=*`, and now they are - except masts and floodlights, because a
+  hundred concrete blocks up the hillside is not a landmark.
+
+- **Castles and grounds** (`knoxbuild/build.py`, `knoxbuild/layout.py`,
+  `knoxbuild/procedural.py`). The same gap one storey down: a castle, a fort,
+  a city gate, a stadium or a sports centre had no kind either, so a keep came
+  out as a bungalow. A castle is a great hall, a chapel, the kitchen that fed
+  everybody, a library and its chambers; a ground is the concourse, changing
+  rooms, a kit store, a first aid room and a counter. `historic=*` is read at
+  last, which is what carried castle and city gate. Stone walls, not
+  clapboard.
+
+- **A room-size setting that moves something** (`knoxbuild/layout.py`).
+  `_room_cap` falls back to MAX_ROOM_AREA for any kind not in KIND_MAX_ROOM,
+  and the split target is clamped to it - so the new kinds sat at 120 tiles
+  whatever KIND_ROOM_SCALE said, and a sweep from 10 to 24 moved the room
+  count by nothing at all. With a cap of their own a castle went from 21 rooms
+  a floor to 9 and a stadium from 21 to 11, median room 45 tiles to 105.
+
 ## 1.4.7.1
 
 - **An update no longer gives up on one file it cannot write**

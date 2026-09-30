@@ -137,6 +137,11 @@ def town() -> list[OSMFeature]:
     feats.append(statue)
     feats.append(way({"building": "triumphal_arch", "historic": "monument", "height": "12",
                       "name": "Selftest Arch"}, box(420, 420, 432, 425)))
+    # A water tower on the edge of town, mapped as a building the way a
+    # surveyor maps one. classify_building has no kind for it, so it used to
+    # come out as a bungalow with a sofa in it.
+    feats.append(way({"man_made": "water_tower", "building": "yes",
+                      "name": "Selftest Water Tower"}, box(392, 420, 400, 428)))
     # A coast along the south: land on the left of the line, sea to the right.
     # Deliberately short: a real download often holds only part of a shore.
     feats.append(way({"natural": "coastline"}, [(0, 30), (600, 30)]))
@@ -2434,6 +2439,7 @@ def main(argv: list[str]) -> int:
         check(colours.get(C.PALE_CONCRETE, 0) > 0, "streets have pavements")
         print("bridges and monuments")
         import json as _json
+        from generator import structures
         raised = _json.load(open(os.path.join(out, "selftest_structures.json"), encoding="utf-8"))
         tiles = raised["tiles"]
         check(any(t[3] == "Floor" and t[4].startswith("ramps_01") and t[2] == 0 for t in tiles)
@@ -2456,6 +2462,19 @@ def main(argv: list[str]) -> int:
         check(any("cemetary_01" in t[4] for t in tiles) and "Selftest Arch" not in names
               and any(t[4] == "ramps_01_19" and t[2] >= 2 for t in tiles),
               "a statue stands in the park and the arch is an arch, not a house")
+        # A tower is legs with a tank on top, and never a floor plan. Counted
+        # around the tower itself: every structure on the map is in this list
+        # and the arch's span would pass a count taken over all of them.
+        tx, ty = proj.to_px(*_ll(396, 424))
+        by_level: dict = {}
+        for x, y, z, layer, tile in tiles:
+            if layer == "Floor" and abs(x - tx) < 15 and abs(y - ty) < 15:
+                by_level.setdefault(z, set()).add((x, y))
+        top = max(by_level) if by_level else 0
+        check(top >= 4 and len(by_level.get(top, ())) > len(by_level.get(top - 2, set()))
+              and "Selftest Water Tower" not in names,
+              f"the water tower is a tank on legs, not a house ({top + 1} storeys, "
+              f"{len(by_level.get(top, ()))} tiles on top over {len(by_level.get(0, ()))})")
         veg = Image.open(os.path.join(out, "selftest_veg.bmp")).convert("RGB")
         pixels = veg.get_flattened_data() if hasattr(veg, "get_flattened_data") else veg.getdata()
         kerbs = sum(1 for c in pixels if c[0] == 12 and c[1] == 34)
