@@ -80,6 +80,9 @@ LANDMARK_TILES = {
     # which one is not a castle. A ground is mostly stand and concourse.
     "castle": 700,
     "stadium": 900,
+    # A shopping centre traced as its outline is already large; this is the
+    # floor below which one is a parade of shops rather than a mall.
+    "mall": 1600,
 }
 
 # Ceilings on the scaling itself. A landmark traced as one room has to grow a

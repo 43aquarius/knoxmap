@@ -27,7 +27,7 @@ DOORS_ON_CORNERS_BUDGET = 0.2
 KINDS = [None, None, "apartment", "apartment", "shop", "school", "civic",
          "church", "medical", "restaurant", "shed",
          "police", "library", "fire", "military", "industrial",
-         "castle", "stadium"]
+         "castle", "stadium", "mall"]
 
 
 def door_pair(storey, door):

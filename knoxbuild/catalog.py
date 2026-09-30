@@ -228,6 +228,7 @@ FLOOR_LINO = 13
 # is tilesandwood_01_42, a third of every interior tile in the county.
 # Appended to a building's own tile table by knoxbuild/tbx.py, the way a
 # style's floor is, so they cost nothing in buildings that do not use them.
+
 EXTRA_FLOORS = {
     "wood_pale":    "floors_interior_tilesandwood_01_42",
     "wood_mid":     "floors_interior_tilesandwood_01_45",
@@ -7157,7 +7158,26 @@ ERIKA_SIGNS = {'N': [['signs_erika_01_000',
        ['signs_erika_02_027', 'signs_erika_02_026', 'signs_erika_02_025', 'signs_erika_02_024']]}
 
 # Official room colours, straight from the tools' RoomNames.txt.
-ROOM_COLORS = {'armory': '120 120 140',
+ROOM_COLORS = {
+               # The rooms Knox County's own mall is made of (Muldraugh cell
+               # 54_22, 325 rooms). Every unit in it has a back storeroom of
+               # its own, and the food court is ringed by kitchens.
+               'concourse': '170 170 170',
+               'foodcourt': '236 156 92',
+               'clothesstore': '198 140 196',
+               'clothesstorage': '150 110 150',
+               'shoestore': '176 124 160',
+               'electronicsstore': '110 150 186',
+               'housewarestore': '156 170 130',
+               'sewingstore': '186 150 170',
+               'cornerstore': '200 180 120',
+               'optometrist': '140 190 190',
+               'dressingrooms': '214 180 214',
+               'departmentstorage': '140 130 120',
+               'giftstorage': '150 140 130',
+               'toystorage': '145 135 125',
+               'bookstorage': '135 130 120',
+               'armory': '120 120 140',
                'lockerroom': '120 140 150',
                'evidenceroom': '130 125 115',
                'openplan': '233 112 19',
@@ -11509,6 +11529,27 @@ HOUSE_STYLES = [{'name': 'clapboard',
                       'NorthWindow': 'overlay_grime_wall_01_009',
                       'WestDoor': 'overlay_grime_wall_01_010',
                       'NorthDoor': 'overlay_grime_wall_01_011'}}}]
+
+# Every interior wall set the house styles carry, one of each. Knox County
+# paints 4.48 different ones into a single building - a kitchen is not the
+# colour of the bedroom next door - and has 9 in all, which is what these are.
+# tbx.py deals a few of them out per room kind (INTERIOR_WALLS_PER_BUILDING).
+def _interior_walls() -> list[dict]:
+    out, seen = [], set()
+    for style in HOUSE_STYLES:
+        entry = style.get("interior")
+        if not entry:
+            continue
+        key = entry["tiles"].get("West")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+    return out
+
+
+INTERIOR_WALLS = _interior_walls()
+
 
 # Materials for buildings OSM tags as something particular.
 SPECIAL_STYLES = {'school': {'name': 'school',

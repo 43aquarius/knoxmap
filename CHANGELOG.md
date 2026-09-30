@@ -1,5 +1,68 @@
 # Changelog
 
+## 1.4.8
+
+- **Malls** (`knoxbuild/layout.py`, `knoxbuild/build.py`,
+  `knoxbuild/interiors.py`, `knoxbuild/catalog.py`). A shopping centre was a
+  "shop" - the corner-shop recipe, which makes one sales floor the width of
+  the front - so a 92x72 mall came out as a single room of 5,670 tiles with
+  an office block on top of it. Loot is capped per room, so that one room got
+  one room's worth over the whole floor. Malls are their own kind now, built
+  from what Knox County's own mall (Muldraugh cell 54_22, 325 rooms over five
+  storeys) is made of: a concourse with the units off it, and fourteen new
+  room kinds - clothes, shoe, electronics, houseware, sewing, corner shop,
+  optometrist, food court and the storerooms behind them. `clothesstore` is
+  the game's spelling, 158 rooms across the county against 9 for the
+  `clothingstore` we were writing, so it carries the better loot table. A big
+  mall lets to 23.8 different trades where the game's lets to about 30.
+
+- **The concourse is a concourse** (`knoxbuild/layout.py`). Knox County's is
+  not a corridor down the middle: it is a wide spine across the building with
+  arms running off it to the far walls, and it covers 27% of its own bounding
+  box. Cut as one band it covered 100% of one and read as a warehouse aisle.
+  Spine and arms are each their own rectangle, and at the size of the game's
+  own mall ours comes out at 27% of the floor against its 25%.
+
+- **Two floors, one space** (`knoxbuild/layout.py`, `knoxbuild/tbx.py`). The
+  game leaves 89% of its mall's ground concourse open to the floor above -
+  5,185 of 5,855 squares have nothing on them at level 1 - so the mall is one
+  room several storeys tall. Ours now cuts the same hole, with a gallery
+  either side and the arms carrying on across it as bridges: without those
+  the hole cut the storey in two and half the units had no way to the stairs.
+  The roof pass counts a hole as built over, or the storey below was roofed;
+  a concourse is written with no ceiling, or BuildingEd laid a lid straight
+  across the opening. The stairs keep their floor and a walkway out to the
+  nearer gallery, rather than standing in mid-air.
+
+- **Nothing of the shops left standing in the mall**
+  (`knoxbuild/layout.py`). A unit is fitted from its own walls outward, and
+  one whose front is the concourse edge laid its wall pieces on the far side
+  of that wall: a furniture shop left fourteen dressers out in the middle of
+  the concourse. The concourse itself is furnished as one - planters, bins,
+  vending - and it is nearly bare on purpose. Knox County's holds 16 pieces
+  of furniture in 5,855 tiles; what fills it is the shopfronts along its
+  edges, not anything standing on it.
+
+- **Castles, forts and grounds the size the game makes them**
+  (`knoxbuild/layout.py`). Everything past a building's room mix falls to the
+  fill, and whichever fill kind has no cap takes the lot: a castle was 5%
+  bedrooms at the size these were tuned on and 63% at the size the landmark
+  growth actually gives them - a keep of nothing but beds. Fixing that
+  exposed the same thing in a stadium, at 39% changing rooms and then 50%
+  cafes. The fill now carries on round its list instead of dropping the whole
+  remainder on the first entry, one room may be cut into at most four, and
+  bedroom and cafe have shares of their own. Police, school, military, shop,
+  house and flats are unmoved.
+
+- **A building is not one colour inside** (`knoxbuild/tbx.py`,
+  `knoxbuild/catalog.py`). InteriorWall has always been written per room and
+  every room was handed the same one, so a building was a single colour
+  throughout however many its style could have used - and the civic styles
+  lead with a blue, which is why every public building was blue. Knox County
+  paints 4.48 different wall sets into one building over 9 in all; a few are
+  dealt out per room kind now, so two bedrooms match and the kitchen does
+  not. Measured back at 4.50.
+
 ## 1.4.7.3
 
 - **The logo on the Discord presence** (`knoxpresence.py`). `large_image` was

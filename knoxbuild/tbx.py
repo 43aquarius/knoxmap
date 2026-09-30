@@ -188,6 +188,9 @@ def _add(entries: list[dict], entry: dict | None) -> int:
 
 
 # How many room kinds in a building carry wall trim. Knox County's schools
+# How many different interior wall sets one building uses. Knox County's
+# figure, measured over 77 buildings in Muldraugh, is 4.48.
+INTERIOR_WALLS_PER_BUILDING = 4
 # run to 0.25 pieces of walls_interior_detailing per 10 m2 and ours to 2.43
 # with every room trimmed, so about one kind in ten keeps it.
 TRIM_SHARE = 0.12
@@ -361,6 +364,24 @@ def render_tbx(plan: Plan | Building, name: str,
         entries.append(C.floor_entry(pick_rng.choice(options)))
         room_floor[kind] = len(entries)
 
+    # Interior walls, room by room. InteriorWall has always been a per-room
+    # attribute here and every room was given the same one, so a building was
+    # one colour throughout however many its style could have used. Knox
+    # County paints 4.48 different sets into a single building - a kitchen is
+    # not the colour of the bedroom next door - over 9 in all. A few are dealt
+    # out per room kind rather than per room, so two bedrooms match and the
+    # kitchen does not, the way the floors above already work.
+    room_wall: dict[str, int] = {}
+    palette = [interior_idx]
+    spare = [e for e in C.INTERIOR_WALLS
+             if not style or e is not style.get("interior")]
+    pick_rng.shuffle(spare)
+    for entry in spare[:INTERIOR_WALLS_PER_BUILDING - 1]:
+        entries.append(entry)
+        palette.append(len(entries))
+    for kind in sorted({r.kind for r in building.rooms}):
+        room_wall[kind] = pick_rng.choice(palette)
+
     out.append(f"<building{_attrs(building_attrs)}>")
 
     for entry in entries:
@@ -427,7 +448,7 @@ def render_tbx(plan: Plan | Building, name: str,
             ("Name", game_name),
             ("InternalName", game_name),
             ("Color", C.ROOM_COLORS[room.kind]),
-            ("InteriorWall", interior_idx),
+            ("InteriorWall", room_wall.get(room.kind, interior_idx)),
             # Skirting and picture rail. Set on every room it came to 2.43
             # pieces per 10 m2 against Knox County's 0.25 - a band of
             # detailing round every wall of every room, which at a distance
@@ -441,7 +462,11 @@ def render_tbx(plan: Plan | Building, name: str,
             ("Floor", room_floor.get(room.kind) or floor_override or floor_idx),
             ("GrimeFloor", 0),
             ("GrimeWall", 0),
-            ("Ceiling", C.CEILING),
+            # A concourse has no ceiling: it is open to the storey above, and
+            # BuildingEd draws a room's ceiling on the floor above it - which
+            # laid a lid straight across the hole and hid the ground floor
+            # the hole is cut to show.
+            ("Ceiling", 0 if room.kind == "concourse" else C.CEILING),
         ]
         out.append(f" <room{_attrs(room_attrs)}/>")
 
@@ -502,7 +527,14 @@ def render_tbx(plan: Plan | Building, name: str,
         # A roof over whatever of this storey has no storey above it: the
         # whole top floor, and the ledge where a tower steps back.
         above = storeys[level + 1].grid if level + 1 < len(storeys) else None
-        exposed = [[v if above is None or not above[y][x] else 0
+        # A square left open in the storey above - the hole down the middle of
+        # a mall's upper floor - has no room there, but it is still built
+        # over: roofing it would put a ceiling across the concourse and hide
+        # the floor the hole exists to show.
+        open_above = (storeys[level + 1].void
+                      if level + 1 < len(storeys) else set())
+        exposed = [[v if above is None or not (above[y][x] or (x, y) in open_above)
+                    else 0
                     for x, v in enumerate(row)] for y, row in enumerate(storey.grid)]
         if any(any(row) for row in exposed):
             rects = roof_rects(exposed)

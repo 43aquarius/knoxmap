@@ -109,8 +109,15 @@ SPECIAL_BY_VALUE = {
     "restaurant": "restaurant", "fast_food": "restaurant", "cafe": "restaurant",
     "bar": "restaurant", "pub": "restaurant", "food_court": "restaurant",
     "retail": "shop", "commercial": "shop", "supermarket": "shop",
-    "convenience": "shop", "mall": "shop", "kiosk": "shop",
-    "department_store": "shop", "shop": "shop", "marketplace": "shop",
+    "convenience": "shop", "kiosk": "shop",
+    "shop": "shop", "marketplace": "shop",
+    # A shopping centre is not a big corner shop. As "shop" it took the shop
+    # recipe - one sales floor the width of the front, stockrooms behind -
+    # and a 92x72 one came out as a single room of 5,670 tiles with an
+    # office block on top. Knox County's mall is a concourse with units off
+    # it: Muldraugh 54_22 is 33.6% hall by floor, and the rest clothes,
+    # department, furniture, gift, toy and book stores of 150 to 400 tiles.
+    "mall": "mall", "department_store": "mall",
     "industrial": "industrial", "warehouse": "industrial",
     "factory": "industrial", "works": "industrial", "manufacture": "industrial",
     "barn": "barn", "farm": "barn", "farm_auxiliary": "barn",
@@ -150,7 +157,7 @@ SPECIAL_BY_NAME = [
     ("cathedral", "church"), ("hospital", "medical"), ("clinic", "medical"),
     ("pharmacy", "medical"), ("warehouse", "industrial"),
     ("factory", "industrial"), ("mill", "industrial"), ("plant", "industrial"),
-    ("market", "shop"), ("mall", "shop"), ("store", "shop"), ("shop", "shop"),
+    ("market", "shop"), ("mall", "mall"), ("store", "shop"), ("shop", "shop"),
     ("diner", "restaurant"), ("restaurant", "restaurant"), ("grill", "restaurant"),
     ("cafe", "restaurant"), ("bar ", "restaurant"), ("barn", "barn"),
     ("library", "library"), ("bibliot", "library"), ("kütüphane", "library"),
@@ -186,6 +193,8 @@ DEFAULT_LEVELS = {
     # again on every storey: at four levels a castle had four chapels.
     "castle": (2, 3),
     "stadium": (1, 2),
+    # Knox County's mall runs to five storeys; two is the common one.
+    "mall": (1, 2),
 }
 
 # Rows of units under one outline.
@@ -409,7 +418,7 @@ BORROWED_STYLE = {"police": "civic", "library": "civic", "fire": "civic",
                   "military": "civic",
                   # Stone, not clapboard: a castle has no style of its own and
                   # the house styles would have built one out of weatherboard.
-                  "castle": "church", "stadium": "civic"}
+                  "castle": "church", "stadium": "civic", "mall": "civic"}
 # Kinds that shipped with a single style, so every church in a county was the
 # same church. The exterior wall is taken from a house style instead, whole -
 # the entry carries its own window and door tiles, so nothing is mixed.

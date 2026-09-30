@@ -49,6 +49,9 @@ class Room:
     # The stair shaft or corridor. Kept as a flag rather than recognised by its
     # rectangle, because a sliver folded into it changes the rectangle.
     is_core: bool = False
+    # Its kind is already decided and the mix must not overwrite it: the
+    # mall concourse, carved before the units are cut out around it.
+    fixed: bool = False
     # An elevator shaft: a sealed box with the lift doors set into one wall.
     # No doorway, no furniture, no windows, never merged into a neighbour.
     is_shaft: bool = False
@@ -79,6 +82,12 @@ class Plan:
     # the real footprint lies. Tiles outside it stay room 0, which is
     # how BuildingEd knows they are not part of the building.
     mask: list[list[bool]] | None = None
+    # Squares deliberately left open to the storey below: the hole in an
+    # upper floor of a mall, so the concourse is one space several storeys
+    # tall and you can see the ground floor from the gallery. They belong to
+    # no room, which is how BuildingEd leaves a square with no floor, and
+    # tbx.py counts them as built-over so the storey below is not roofed.
+    void: set = field(default_factory=set)
     # The stair shaft, as (x0, y0, x1, y1) inclusive, identical on every
     # storey of a building. Painted last so it is always exactly one room.
     core: tuple[int, int, int, int] | None = None
@@ -184,6 +193,40 @@ ROOM_STYLE = {
     "bookstore": (C.FLOOR_WOOD, "Bookstore", ["bookshelf", "bookshelf", "shop_counter"]),
     "toolstore": (C.FLOOR_LINO, "Tool Store", ["metal_rack", "shop_shelf", "shop_counter"]),
     "grocerystorage": (C.FLOOR_LINO, "Grocery Storage", ["metal_rack", "crate", "crate", "shelf"]),
+    # A concourse is walked down, not furnished. Knox County's has 16 pieces
+    # of furniture in 5,855 tiles - 0.03 per 10 - and what fills it instead is
+    # the shopfronts along its edges (location_shop_mall_01). A planter and a
+    # bin here and there is the whole of it; anything more and the hundreds of
+    # people it is built for cannot get past.
+    "concourse": (C.FLOOR_TILE_PALE, "Concourse",
+                  ["plant", "shop_bin", "vending"]),
+    # The units Knox County's mall is let out to, and the storerooms behind
+    # them. Fitted out by interiors.furnish_store like the shops above; these
+    # wishlists are for a unit too small for rows of shelving.
+    "clothesstore": (C.FLOOR_WOOD, "Clothes Store",
+                     ["clothes_rack", "shop_shelf_wood", "mirror", "shop_counter", "mannequin"]),
+    "shoestore": (C.FLOOR_WOOD, "Shoe Store",
+                  ["shop_shelf_wood", "shop_display", "mirror", "shop_counter"]),
+    "sewingstore": (C.FLOOR_WOOD, "Sewing Store",
+                    ["shop_shelf_wood", "shop_display", "shop_counter"]),
+    "electronicsstore": (C.FLOOR_TILE_PALE, "Electronics Store",
+                         ["shop_shelf", "shop_case", "shop_counter"]),
+    "housewarestore": (C.FLOOR_TILE_CHECK, "Houseware Store",
+                       ["shop_shelf_wood", "dresser", "shop_counter"]),
+    "cornerstore": (C.FLOOR_TILE_PALE, "Corner Store",
+                    ["shop_shelf_red", "shop_fridge", "shop_counter_red"]),
+    "optometrist": (C.FLOOR_TILE_PALE, "Optometrist",
+                    ["shop_case", "shop_counter", "mirror", "chair"]),
+    "dressingrooms": (C.FLOOR_WOOD, "Dressing Rooms", ["mirror", "chair"]),
+    "foodcourt": (C.FLOOR_TILE_CHECK, "Food Court",
+                  ["table", "chair", "chair", "chair", "bin", "plant"]),
+    "clothesstorage": (C.FLOOR_LINO, "Clothes Storage",
+                       ["metal_rack", "crate", "shelf", "clothes_rack"]),
+    "departmentstorage": (C.FLOOR_LINO, "Department Storage",
+                          ["metal_rack", "crate", "crate", "shelf"]),
+    "giftstorage": (C.FLOOR_LINO, "Gift Storage", ["shelf", "crate", "metal_rack"]),
+    "toystorage": (C.FLOOR_LINO, "Toy Storage", ["shelf", "crate", "metal_rack"]),
+    "bookstorage": (C.FLOOR_LINO, "Book Storage", ["shelf", "crate", "bookshelf"]),
     # What OpenStreetMap says a ground floor is (knoxbuild/uses.py), by the
     # game's own room names so the loot fits: eating places and their
     # kitchens, and the other shops and services of a high street.
@@ -380,6 +423,27 @@ SPECIAL_MIXES = {
                     "bathroom", "kitchen", "bedroom"],
                    ["bedroom", "bedroom", "armystorage", "storage", "office"]),
     "shed":       (["shed"], ["shed"]),
+    # A shopping centre, measured off Muldraugh 54_22: a third of the floor
+    # is concourse, and the rest is units of 150-400 tiles - clothes,
+    # department, furniture, gift, toy, book and sports shops - with a food
+    # court, lavatories, a janitor's and the centre office behind. Every one
+    # of these is a room interiors.py can fit out as a shop.
+    # No "hall" in either list: the concourse is cut before the units
+    # (_mall_rooms) and dealing more halls on top of it took the mall to 53%
+    # circulation against the game's 33.6%.
+    "mall":       (["foodcourt", "clothesstore", "departmentstore",
+                    "sportstore", "bookstore", "pizzakitchen",
+                    "giftstore", "toystore", "shoestore", "electronicsstore",
+                    "furniturestore", "bathroom", "jewelrystore",
+                    "housewarestore", "chinesekitchen", "gunstore",
+                    "clothesstorage", "office", "toolstore", "musicstore",
+                    "pharmacy", "candystore", "bakery", "icecreamkitchen",
+                    "sewingstore", "optometrist", "janitor", "cornerstore",
+                    "departmentstorage", "security", "storage", "breakroom"],
+                   ["clothesstore", "giftstore", "clothesstorage",
+                    "toystore", "bookstore", "shoestore", "sportstore",
+                    "housewarestore", "storage", "electronicsstore",
+                    "jewelrystore", "musicstore", "candystore"]),
     # A castle is a great hall with a chapel, a kitchen that fed everybody and
     # the rooms people slept in, and today a ticket desk and a gift counter by
     # the door. Every name here is one the game furnishes; "throne room" would
@@ -390,9 +454,13 @@ SPECIAL_MIXES = {
     # A ground: the concourse under the stand, the changing rooms and showers
     # off it, the kit store, a first aid room and the club offices. The food
     # is a counter on the concourse, which is what cafe is.
+    # lockerroom is not in the fill: it is one of the kinds _split_to_size
+    # cuts down to size, so every one the fill handed out became a row of
+    # eight and a big ground came out 57% changing rooms. Twice in the mix is
+    # the home side and the away side, and that is where they stay.
     "stadium":    (["hall", "lockerroom", "bathroom", "sportstorage", "cafe",
-                    "office", "clinic", "gym", "storage", "lockerroom"],
-                   ["hall", "lockerroom", "sportstorage", "storage"]),
+                    "office", "clinic", "gym", "storage", "hall"],
+                   ["hall", "cafe", "storage", "office", "sportstorage"]),
     "medical":    (["clinic", "medical", "lobby", "office", "bathroom",
                     "storage"],
                    ["clinic", "medical", "storage"]),
@@ -579,6 +647,11 @@ OPEN_PLAN_SHARE = 0.44
 # differ, this maps ours to one the game furnishes and loots.
 ROOM_NAME = {
     "openplan": "livingroom",
+    # The mall concourse. The game knows it as a hall and the loot tables key
+    # off that, so that is the name it is written under; it is a kind of its
+    # own here only so it can be furnished as a concourse - planters, bins,
+    # vending, the odd kiosk - instead of as the bare corridor a hall is.
+    "concourse": "hall",
     # Knox County has 694 rooms called diningroom and 11 called dining. Ours
     # called every house's one "dining", which is a name the loot tables do
     # not know - the same mistake as "cells" for "prisoncells". The kind stays
@@ -952,7 +1025,7 @@ UPSTAIRS = ["bedroom", "kidsbedroom", "bedroom", "laundry",
 # or the other; ours had no circulation upstairs at all, so a floor of bedrooms
 # was a chain of them - the commonest door in the whole town was one bedroom
 # into the next.
-CIRCULATION = {"hall", "lobby", "livingroom"}
+CIRCULATION = {"hall", "lobby", "livingroom", "concourse"}
 
 
 def _landing(plan: Plan, adj: dict, free: list,
@@ -1207,7 +1280,30 @@ ROOM_CAP_PER = {
     "policegunstorage": 30, "policeoutfitstorage": 30, "policelocker": 15,
     "policehall": 25, "firegarage": 12, "armystorage": 4, "medical": 4,
     "clinic": 4, "officestorage": 12, "janitor": 18,
-    "security": 25, }
+    "security": 25,
+    # A castle's chambers. Everything past the mix falls to the fill, and
+    # bedroom was the only kind in the castle's with no cap, so it took every
+    # room a bigger keep had: 5% of a small one, 51% at the size the landmark
+    # growth actually gives them, 63% at the largest. A barracks is unmoved -
+    # its fill falls back to bedroom, which is what a dormitory block is.
+    "bedroom": 4,
+    # A ground has a few counters on the concourse, not a food hall: cafe was
+    # the one kind in the stadium's fill with no cap and took 36% of a big
+    # one once the rest were spent.
+    "cafe": 10,
+    # No mall is all one chain. Each unit kind takes a share of the units,
+    # the way a fill kind without a cap took the whole of a big castle.
+    "clothingstore": 8, "giftstore": 12, "toystore": 14, "bookstore": 14,
+    "furniturestore": 14, "sportstore": 14, "departmentstore": 16,
+    # No mall is all one chain, and Knox County's lets to about thirty
+    # different trades: clothes 11 units, department 21, gift 3, toy 3, shoe
+    # 1, jeweller 3, houseware 3. These keep any one of them to a share.
+    "clothesstore": 9, "shoestore": 16, "electronicsstore": 18,
+    "housewarestore": 16, "sewingstore": 30, "cornerstore": 30,
+    "optometrist": 30, "jewelrystore": 16, "musicstore": 20,
+    "candystore": 20, "toolstore": 20, "gunstore": 30, "pharmacy": 25,
+    "bakery": 25, "foodcourt": 40, "clothesstorage": 12,
+    "departmentstorage": 25, }
 
 
 # How big each kind of room is in Knox County, in tiles. The mix used to be
@@ -1264,6 +1360,11 @@ OVERSIZE = 1.6
 # offices of 48 however big the splitter had made them.
 SHRINK_TO_KIND = {"prisoncells", "closet", "policelocker", "lockerroom",
                   "janitor", "officestorage"}
+# How many rooms one oversized room may be cut into. In a big building every
+# room is big, so a kind that is small everywhere is always oversized and was
+# halved until it fit: two changing rooms in a 70x56 ground became sixteen,
+# 39% of the building. A cell block of eight is still a cell block.
+MAX_SPLIT_PIECES = 4
 ONE_OF_A_KIND = {"library", "gym", "kitchen", "diningroom", "lobby",
                  "janitor", "schoollab", "interrogationroom", "armory",
                  "evidenceroom", "security", "breakroom"}
@@ -1290,10 +1391,11 @@ def _split_to_size(plan: Plan, rng: random.Random) -> None:
                 or room.kind not in SHRINK_TO_KIND):
             continue
         queue = [idx]
+        pieces = 1
         while queue:
             i = queue.pop()
             r = plan.rooms[i]
-            if r.area < want * OVERSIZE:
+            if r.area < want * OVERSIZE or pieces >= MAX_SPLIT_PIECES:
                 continue
             # Halve the long way, so a cell block comes out as a row.
             if r.w >= r.h:
@@ -1316,6 +1418,7 @@ def _split_to_size(plan: Plan, rng: random.Random) -> None:
                     r.y1 = new.y1
                 continue
             plan.rooms.append(new)
+            pieces += 1
             at = len(plan.rooms)
             for y in range(new.y0, new.y1 + 1):
                 for x in range(new.x0, new.x1 + 1):
@@ -1352,7 +1455,13 @@ def _assign_kinds(rooms: list[Room], mix: list[str], fill: list[str]) -> None:
                 kind = min(ready, key=lambda k: abs(
                     ROOM_MEDIAN_AREA.get(k, 25) - room.area))
             else:
-                kind = ready[0] if ready else fill[0]
+                # Every fill kind is spent. Carry on round the list from
+                # where this room falls rather than dropping the whole
+                # remainder on the first entry: a big building has far more
+                # rooms than the mix and the caps together cover, and that
+                # gave a stadium sixteen identical corridors and a castle a
+                # floor of beds.
+                kind = ready[0] if ready else fill[start]
         room.kind = kind
         used[kind] += 1
     # The smallest room makes a far more convincing bathroom than a hall. It
@@ -1391,6 +1500,236 @@ def _circulation(plan: Plan, rooms: list[Room]) -> int:
     for i, kind in kinds.items():
         plan.rooms[i - 1].kind = kind
     return made
+
+
+# Kinds whose rooms are run together into one space rather than left as a row
+# of separate corridors. Knox County's mall is one concourse of 5,855 tiles on
+# the ground floor - a single room made of 62 rectangles - where ours was
+# seven halls of about 300 tiles each, because the splitter's target caps
+# every room in a building and a hall is no exception. A mall holds hundreds
+# of people and the concourse is the reason it can.
+MERGE_CIRCULATION: set[str] = set()
+
+
+# How much of a mall's depth the concourse takes, and the width it is held
+# between. Knox County's mall is 33.6% hall by floor and that hall is one
+# room of 5,855 tiles, not a row of corridors: the units open onto it and it
+# is where the hundreds of people are. Cut before the units, so it is one
+# rectangle rather than whatever the splitter leaves over.
+MALL_CONCOURSE_SHARE = 0.16
+MALL_CONCOURSE_MIN = 9
+MALL_CONCOURSE_MAX = 26
+# The gallery either side of the hole on an upper floor. Knox County's mall
+# leaves 89% of the ground concourse open to the floor above - 5,185 of its
+# 5,855 squares have nothing on them at level 1 - so the two floors read as
+# one space. This is how much of the band stays walkable up there.
+MALL_GALLERY = 3
+# The arms that run off the spine to the far walls: how wide against the
+# spine, the bounds on that, how far apart, and how many at most. Knox
+# County's concourse is 27% of its bounding box because of these; without
+# them a mall is one aisle with rooms down each side.
+MALL_ARM_SHARE = 0.60
+MALL_ARM_MIN = 5
+MALL_ARM_MAX = 8
+MALL_ARM_EVERY = 26
+MALL_ARMS_MAX = 3
+
+
+def _mall_rooms(plan: Plan, rng: random.Random, target: int,
+                level: int = 0) -> None:
+    """A branching concourse, with the units filling the blocks between it.
+
+    Knox County's mall concourse is not a corridor down the middle: it is a
+    wide spine across the building with arms running off it to the far walls,
+    and it covers 27% of its own bounding box. A single band covered 100% of
+    one and read as a warehouse aisle. The spine and each arm is its own
+    rectangle - a Room here is its rectangle, and the doors and the furnishing
+    both read it - and they are all concourse, so the game sees one run of
+    hall the shopper walks the length of.
+
+    Above the ground floor the middle of the spine is left open (no room, so
+    no floor) with a gallery either side, which is how the mall is one space
+    several storeys tall.
+    """
+    w, h = plan.width, plan.height
+    along_x = w >= h
+    across, length = (h, w) if along_x else (w, h)
+    band = max(MALL_CONCOURSE_MIN,
+               min(MALL_CONCOURSE_MAX, round(across * MALL_CONCOURSE_SHARE)))
+    if across - band < 2 * MIN_ROOM:
+        _split(0, 0, w - 1, h - 1, rng, MAX_DEPTH, plan.rooms,
+               target_area=target, mask=plan.mask)
+        return
+    start = (across - band) // 2
+
+    def put(a0, b0, a1, b1, kind=None, fixed=False):
+        """A room in the building's own axes (a = along, b = across)."""
+        if a1 < a0 or b1 < b0:
+            return
+        if along_x:
+            plan.rooms.append(Room(a0, b0, a1, b1, kind=kind or "hall",
+                                   fixed=fixed) if kind
+                              else Room(a0, b0, a1, b1))
+        else:
+            plan.rooms.append(Room(b0, a0, b1, a1, kind=kind or "hall",
+                                   fixed=fixed) if kind
+                              else Room(b0, a0, b1, a1))
+
+    def cut(a0, b0, a1, b1):
+        if a1 < a0 or b1 < b0:
+            return
+        box = (a0, b0, a1, b1) if along_x else (b0, a0, b1, a1)
+        _split(box[0], box[1], box[2], box[3], rng, MAX_DEPTH, plan.rooms,
+               target_area=target, mask=plan.mask)
+
+    # Where the arms meet the spine, worked out first: the hole in an upper
+    # floor stops at them, so each arm carries on across as a bridge. Without
+    # that the hole cut the storey in two and half the units had no way to
+    # the stairs.
+    arm = max(MALL_ARM_MIN, min(MALL_ARM_MAX, round(band * MALL_ARM_SHARE)))
+    count = max(1, min(MALL_ARMS_MAX, (length - arm) // MALL_ARM_EVERY))
+    centres = [round(length * (k + 1) / (count + 1)) for k in range(count)]
+    spans = []
+    for c in centres:
+        a0 = max(0, min(length - arm, c - arm // 2))
+        if not spans or a0 > spans[-1][1] + MIN_ROOM:
+            spans.append((a0, a0 + arm - 1))
+    bridged = {a for a0, a1 in spans for a in range(a0, a1 + 1)}
+
+    # The spine, all the way across.
+    hole = band - 2 * MALL_GALLERY
+    open_middle = level > 0 and hole >= 3
+    if open_middle:
+        put(0, start, length - 1, start + MALL_GALLERY - 1, "concourse", True)
+        put(0, start + band - MALL_GALLERY, length - 1, start + band - 1,
+            "concourse", True)
+        for a0, a1 in spans:
+            put(a0, start + MALL_GALLERY, a1, start + band - MALL_GALLERY - 1,
+                "concourse", True)
+        for b in range(start + MALL_GALLERY, start + band - MALL_GALLERY):
+            for a in range(length):
+                if a not in bridged:
+                    plan.void.add((a, b) if along_x else (b, a))
+    else:
+        put(0, start, length - 1, start + band - 1, "concourse", True)
+
+    # The units fill the blocks between the arms.
+    for lo, hi in (0, start - 1), (start + band, across - 1):
+        if hi < lo:
+            continue
+        edge = 0
+        for a0, a1 in spans:
+            cut(edge, lo, a0 - 1, hi)
+            put(a0, lo, a1, hi, "concourse", True)
+            edge = a1 + 1
+        cut(edge, lo, length - 1, hi)
+    if plan.void:
+        _bridge_core(plan, along_x)
+
+
+# What may stand on the concourse: what its own wishlist puts there, plus the
+# light switches and lamps every room gets. With Erika's Tiles the plants come
+# through as erika_plant_*, so these are matched as prefixes.
+CONCOURSE_KEEP = {"plant", "erika_plant", "shop_bin", "vending",
+                  "erika_vending", "switch", "lamp", "light"}
+
+
+def _clear_concourse(plan: Plan) -> int:
+    """Take off the concourse whatever the units put there.
+
+    A shop is fitted from its own walls out, and a unit whose front is the
+    concourse edge lays its wall pieces on the far side of that wall - a
+    furniture shop left fourteen dressers standing in the middle of the mall.
+    Anything on a concourse tile that is not concourse fitting comes off.
+    """
+    concourse = {i for i, r in enumerate(plan.rooms, start=1)
+                 if r.kind == "concourse"}
+    if not concourse:
+        return 0
+    kept, dropped = [], 0
+    for piece in plan.furniture:
+        role, x, y = piece[0], piece[1], piece[2]
+        inside = (0 <= y < len(plan.grid) and 0 <= x < len(plan.grid[0])
+                  and plan.grid[y][x] in concourse)
+        if inside and not any(role.startswith(k) for k in CONCOURSE_KEEP):
+            dropped += 1
+            continue
+        kept.append(piece)
+    plan.furniture = kept
+    return dropped
+
+
+def _bridge_core(plan: Plan, along_x: bool) -> None:
+    """Keep the stairs out of the hole, and a way to them across it.
+
+    The stair core stands in the middle of the building, which is the middle
+    of the concourse, which is exactly where the hole goes: left alone it was
+    a landing marooned in mid-air with the galleries out of reach either side.
+    The core keeps its floor and a walkway runs from it to the nearer gallery.
+    """
+    if not plan.core:
+        return
+    cx0, cy0, cx1, cy1 = plan.core
+    rows = [y for x, y in plan.void]
+    cols = [x for x, y in plan.void]
+    lo, hi = (min(rows), max(rows)) if along_x else (min(cols), max(cols))
+    for x in range(cx0, cx1 + 1):
+        for y in range(cy0, cy1 + 1):
+            plan.void.discard((x, y))
+    if along_x:
+        # Out of the core to whichever edge of the hole is closer.
+        up = (cy0 - lo) <= (hi - cy1)
+        span = range(lo, cy0) if up else range(cy1 + 1, hi + 1)
+        for y in span:
+            for x in range(cx0, cx1 + 1):
+                plan.void.discard((x, y))
+    else:
+        left = (cx0 - lo) <= (hi - cx1)
+        span = range(lo, cx0) if left else range(cx1 + 1, hi + 1)
+        for x in span:
+            for y in range(cy0, cy1 + 1):
+                plan.void.discard((x, y))
+
+
+def _merge_halls(plan: Plan) -> int:
+    """Run neighbouring halls together into one concourse.
+
+    Only where the two make a rectangle between them: a Room here is its
+    rectangle, and the doors and the furnishing both read it, so an L-shaped
+    room would put doors and shelving outside the room. Repeated until nothing
+    else will join, which turns a row of corridor cells into one long hall.
+    """
+    merged = 0
+    changed = True
+    while changed:
+        changed = False
+        halls = [(i, r) for i, r in enumerate(plan.rooms, start=1)
+                 if r.kind == "hall" and not r.is_core and not r.is_shaft]
+        for ai, a in halls:
+            for bi, b in halls:
+                if ai >= bi or a.kind != "hall" or b.kind != "hall":
+                    continue
+                side_by_side = (a.y0 == b.y0 and a.y1 == b.y1
+                                and (a.x1 + 1 == b.x0 or b.x1 + 1 == a.x0))
+                stacked = (a.x0 == b.x0 and a.x1 == b.x1
+                           and (a.y1 + 1 == b.y0 or b.y1 + 1 == a.y0))
+                if not (side_by_side or stacked):
+                    continue
+                for y in range(b.y0, b.y1 + 1):
+                    for x in range(b.x0, b.x1 + 1):
+                        if plan.grid[y][x] == bi:
+                            plan.grid[y][x] = ai
+                a.x0, a.y0 = min(a.x0, b.x0), min(a.y0, b.y0)
+                a.x1, a.y1 = max(a.x1, b.x1), max(a.y1, b.y1)
+                b.kind = None          # owns no tiles now; _renumber drops it
+                merged += 1
+                changed = True
+                break
+            if changed:
+                break
+    if merged:
+        _renumber(plan)
+    return merged
 
 
 def _renumber(plan: Plan) -> None:
@@ -2111,6 +2450,8 @@ MIN_WALL_FOR_WINDOW = 3
 # and the rest is spread over a dozen styles, so ours spreads over three.
 SHELVES = ("shelf", "shelf_1", "shelf_2")
 SHELVING = {
+    # Nothing stands along a concourse wall: that edge is the shopfronts.
+    "concourse": (),
     "bathroom": SHELVES + ("dresser",),
     "kitchen": SHELVES,
     "laundry": SHELVES + ("dresser",),
@@ -4014,7 +4355,7 @@ def _stair_foot(stairs: tuple[int, int, str] | None) -> tuple[int, int] | None:
 # A great hall and a concourse are big rooms; neither building is cut into
 # bedsits.
 KIND_ROOM_SCALE = {"industrial": 6.0, "barn": 5.0, "shed": 8.0, "church": 12.0,
-                   "castle": 8.0, "stadium": 11.0,
+                   "castle": 14.0, "stadium": 11.0, "mall": 16.0,
                    "shop": 2.0, "school": 9.0, "civic": 2.5,
                    "restaurant": 1.5, "medical": 1.3, "offices": 3.0,
                    "police": 2.0, "library": 8.0, "fire": 4.0,
@@ -4050,7 +4391,10 @@ KIND_MAX_ROOM = {"church": 340, "library": 280, "school": 170, "gym": 320,
                  # A great hall and a concourse. Without an entry here the cap
                  # is MAX_ROOM_AREA whatever KIND_ROOM_SCALE says, which is
                  # why no room-size setting moved either of these.
-                 "castle": 340, "stadium": 460}
+                 "castle": 340, "stadium": 460,
+                 # Knox County's mall units: a clothes shop is 306 tiles at
+                 # the median, a department store 441, a furniture shop 379.
+                 "mall": 440}
 
 
 def _room_cap(kind: str | None) -> int:
@@ -4104,6 +4448,8 @@ def build_plan(width: int, height: int, commercial: bool = False,
         _apartment_rooms(plan, rng, target, HOTEL_FRONTAGE if hotel else FLAT_FRONTAGE)
     elif shop_floor and kind in ("shop", "restaurant"):
         _shop_rooms(plan, rng, street)
+    elif mix_kind == "mall":
+        _mall_rooms(plan, rng, target, level)
     else:
         # A house floor gets one bathroom-sized room; anything else cut this
         # way - a factory floor, a civic building - has no bathroom to put in
@@ -4131,10 +4477,14 @@ def build_plan(width: int, height: int, commercial: bool = False,
         _assign_shop_floor(plan, rng, street, uses, several=(kind == "retail"))
     elif mix_kind and mix_kind in SPECIAL_MIXES:
         mix, fill = SPECIAL_MIXES[mix_kind]
-        rooms = [r for r in plan.rooms if not r.is_core]
+        # A room whose kind is already decided - the mall concourse - keeps
+        # it; the mix is dealt to the rest.
+        rooms = [r for r in plan.rooms if not r.is_core and not r.fixed]
         _assign_kinds(rooms, mix, fill)
         if mix_kind in NEEDS_CORRIDOR:
             _circulation(plan, rooms)
+        if mix_kind in MERGE_CIRCULATION:
+            _merge_halls(plan)
     elif commercial:
         rooms = [r for r in plan.rooms if not r.is_core]
         _assign_kinds(rooms, COMMERCIAL, COMMERCIAL_FILL)
@@ -4161,6 +4511,8 @@ def build_plan(width: int, height: int, commercial: bool = False,
             # round it.
             _shop_doors(plan, street)
     _furnish(plan, rng, stairs, street)
+    if mix_kind == "mall":
+        _clear_concourse(plan)
     return plan
 
 
