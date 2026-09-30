@@ -11548,7 +11548,48 @@ def _interior_walls() -> list[dict]:
     return out
 
 
-INTERIOR_WALLS = _interior_walls()
+# The interior wall styles Knox County itself uses, read off its compiled
+# cells rather than guessed at: a style is four tiles (west, north, and the
+# two corners) at a base that falls on a 16, with its window and door tiles
+# eight and ten further on. Only the ones whose whole set the game uses are
+# here - a style with no window or door tile in it would leave a hole in a
+# wall. Its mall alone paints 117 different wall tiles where we managed 27.
+GAME_WALL_STYLES = [
+    ("walls_commercial_01", 32), ("walls_commercial_02", 16),
+    ("walls_commercial_02", 32), ("walls_commercial_03", 16),
+    ("walls_interior_house_01", 0), ("walls_interior_house_01", 16),
+    ("walls_interior_house_01", 32), ("walls_interior_house_01", 48),
+    ("walls_interior_house_02", 0), ("walls_interior_house_02", 16),
+    ("walls_interior_house_02", 48),
+    ("walls_interior_house_03", 0), ("walls_interior_house_03", 16),
+    ("walls_interior_house_03", 32), ("walls_interior_house_03", 48),
+    ("walls_interior_house_04", 0), ("walls_interior_house_04", 16),
+    ("walls_interior_house_04", 32),
+]
+
+
+def _wall_style(sheet: str, base: int) -> dict:
+    """One (sheet, base) as an interior-wall tile-table entry."""
+    def t(n: int) -> str:
+        return f"{sheet}_{base + n:03d}"
+    return {"category": "interior_walls",
+            "tiles": {"West": t(0), "North": t(1), "NorthWest": t(2),
+                      "SouthEast": t(3), "WestWindow": t(8), "NorthWindow": t(9),
+                      "WestDoor": t(10), "NorthDoor": t(11)}}
+
+
+def _all_interior_walls() -> list[dict]:
+    out = _interior_walls()
+    seen = {e["tiles"]["West"] for e in out}
+    for sheet, base in GAME_WALL_STYLES:
+        entry = _wall_style(sheet, base)
+        if entry["tiles"]["West"] not in seen:
+            seen.add(entry["tiles"]["West"])
+            out.append(entry)
+    return out
+
+
+INTERIOR_WALLS = _all_interior_walls()
 
 
 # Materials for buildings OSM tags as something particular.

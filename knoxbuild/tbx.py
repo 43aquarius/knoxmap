@@ -190,7 +190,13 @@ def _add(entries: list[dict], entry: dict | None) -> int:
 # How many room kinds in a building carry wall trim. Knox County's schools
 # How many different interior wall sets one building uses. Knox County's
 # figure, measured over 77 buildings in Muldraugh, is 4.48.
+#
+# A mall is the exception: every unit in it is let to somebody else and
+# painted to suit, and the game's own runs to 117 different wall tiles in the
+# one building where an ordinary house has a dozen. It gets one per room kind
+# instead, out of the whole list.
 INTERIOR_WALLS_PER_BUILDING = 4
+WALLS_PER_KIND = {"mall": 99}
 # run to 0.25 pieces of walls_interior_detailing per 10 m2 and ours to 2.43
 # with every room trimmed, so about one kind in ten keeps it.
 TRIM_SHARE = 0.12
@@ -376,11 +382,17 @@ def render_tbx(plan: Plan | Building, name: str,
     spare = [e for e in C.INTERIOR_WALLS
              if not style or e is not style.get("interior")]
     pick_rng.shuffle(spare)
-    for entry in spare[:INTERIOR_WALLS_PER_BUILDING - 1]:
+    kinds_here = sorted({r.kind for r in building.rooms})
+    want = min(WALLS_PER_KIND.get(getattr(storeys[0], "kind", None) or "",
+                                  INTERIOR_WALLS_PER_BUILDING),
+               len(kinds_here))
+    for entry in spare[:max(0, want - 1)]:
         entries.append(entry)
         palette.append(len(entries))
-    for kind in sorted({r.kind for r in building.rooms}):
-        room_wall[kind] = pick_rng.choice(palette)
+    for i, kind in enumerate(kinds_here):
+        # A mall gives each trade its own; everywhere else they share a few.
+        room_wall[kind] = (palette[i % len(palette)] if want >= len(kinds_here)
+                           else pick_rng.choice(palette))
 
     out.append(f"<building{_attrs(building_attrs)}>")
 

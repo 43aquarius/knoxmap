@@ -2,6 +2,17 @@
 
 ## 1.4.8
 
+- **Every unit in a mall its own colour** (`knoxbuild/catalog.py`,
+  `knoxbuild/tbx.py`). Knox County's mall paints 117 different interior wall
+  tiles into the one building, where ours managed 27 - each unit is let to
+  somebody else and decorated to suit. The wall styles the game itself uses
+  are read off its compiled cells rather than guessed at from tile numbers,
+  which is how the school ended up full of clocks: a style is its four wall
+  tiles at a base on a 16 with the window and door tiles after them, and only
+  the eighteen whose whole set the game uses are taken. Twenty-three styles
+  to draw from now, and a mall takes one per trade. Ours: 112 tiles. Ordinary
+  buildings are untouched at 4.0 wall sets each against the game's 4.48.
+
 - **Malls** (`knoxbuild/layout.py`, `knoxbuild/build.py`,
   `knoxbuild/interiors.py`, `knoxbuild/catalog.py`). A shopping centre was a
   "shop" - the corner-shop recipe, which makes one sales floor the width of
