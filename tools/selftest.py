@@ -2325,10 +2325,13 @@ def check_updater(check, work: str) -> None:
         z.writestr("KnoxMap/output/mytown/mytown.bmp", "a release must not overwrite maps")
         z.writestr("KnoxMap/../escape.txt", "outside the folder")
     saved = {k: getattr(updater, k) for k in ("BASE_DIR", "UPDATE_DIR", "STAGED", "MANIFEST",
+                                              "ASIDE_DIR", "FILE_TRIES", "FILE_GAP_S",
                                               "current_version", "enabled")}
     try:
         updater.BASE_DIR, updater.UPDATE_DIR = base, update_dir
         updater.STAGED, updater.MANIFEST = update_dir / "staged.json", base / saved["MANIFEST"].name
+        updater.ASIDE_DIR = update_dir / "replaced"
+        updater.FILE_TRIES, updater.FILE_GAP_S = 2, 0.01
         updater.current_version = lambda: "1.0"
         updater.enabled = lambda: True
         updater.STAGED.write_text(json.dumps({"version": "9.9", "zip": str(zip_path)}))
@@ -2355,6 +2358,47 @@ def check_updater(check, work: str) -> None:
               "a version chosen in the menu goes in, older ones too")
         check(updater.is_newer("1.10", "1.9") and not updater.is_newer("1.2", "1.2.0")
               and updater.is_newer("1.2.1", "1.2"), "versions compare as numbers")
+
+        # One file that will not go in must not lose the whole update. Windows
+        # refuses to overwrite a file another program has open - a virus
+        # scanner reading KnoxMap.exe was enough - and the run used to stop
+        # there with half the release in place, CHANGELOG.md among it, so
+        # KnoxMap read as the new version and never looked again.
+        updater.enabled = lambda: True
+        (base / updater.VERSION_FILE).write_text("## 1.0\n")
+        # A folder where the release has a file cannot be overwritten on any
+        # system, which is the same dead end: the old one is moved aside.
+        stuck = base / "stuck"
+        stuck.mkdir()
+        (stuck / "in the way").write_text("not something a file can replace")
+        aside_zip = update_dir / "KnoxMap-v9.9.zip"
+        with zipfile.ZipFile(aside_zip, "w") as z:
+            z.writestr(f"KnoxMap/{updater.VERSION_FILE}", "## 9.9\n")
+            z.writestr("KnoxMap/stuck", "a file where the install has a folder")
+        updater.STAGED.write_text(json.dumps({"version": "9.9", "zip": str(aside_zip)}))
+        check(updater.apply_staged() and (base / "stuck").is_file()
+              and (updater.ASIDE_DIR / "stuck" / "in the way").exists(),
+              "a file that will not be overwritten is moved aside and the update goes in")
+
+        # And when it cannot even be moved: the version stays as it was and
+        # the download waits for the next start rather than being thrown away.
+        (base / updater.VERSION_FILE).write_text("## 1.0\n")
+        (base / "locked").write_text("a file where the release has a folder")
+        half_zip = update_dir / "KnoxMap-v9.9b.zip"
+        with zipfile.ZipFile(half_zip, "w") as z:
+            z.writestr(f"KnoxMap/{updater.VERSION_FILE}", "## 9.9\n")
+            z.writestr("KnoxMap/locked/module.py", "cannot be unpacked over a file")
+        updater.STAGED.write_text(json.dumps({"version": "9.9", "zip": str(half_zip)}))
+        blocked = updater.apply_staged()
+        left = json.loads(updater.STAGED.read_text()) if updater.STAGED.exists() else {}
+        check(not blocked and (base / updater.VERSION_FILE).read_text().startswith("## 1.0")
+              and left.get("tries") == 1 and half_zip.exists(),
+              "an update that will not go in keeps the version it had and stays staged")
+        (base / "locked").unlink()
+        check(updater.apply_staged()
+              and (base / "locked" / "module.py").exists()
+              and (base / updater.VERSION_FILE).read_text().startswith("## 9.9"),
+              "and the next start puts that update in")
     finally:
         for k, v in saved.items():
             setattr(updater, k, v)

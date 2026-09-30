@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.4.7.1
+
+- **An update no longer gives up on one file it cannot write**
+  (`updater.py`). Windows will not let a file be overwritten while another
+  program has it open, and something usually does for a moment: a virus
+  scanner reading the file it was just handed - KnoxMap.exe above all, which
+  Defender takes an interest in (#9) - OneDrive, the launcher that has not
+  quite finished exiting. One such file ended the whole update, and because
+  CHANGELOG.md is what KnoxMap reads its version out of and went in before it,
+  the install was left reading as the new version with most of the release
+  still the old one, with the download deleted and nothing to try again.
+  Reproduced by holding KnoxMap.exe open over a 1.4.6 install: it came out
+  saying 1.4.7 with `app.py`, `knoxmap.py` and everything else past that file
+  untouched. Each file is now waited for and tried again, and when it still
+  will not go the old one is renamed out of the way instead, which Windows
+  allows where it does not allow a replacement. The version file goes in last,
+  so a run that stops halfway still reads as the old version, keeps its
+  download and applies it on the next start - and after three starts it says
+  so in the window rather than fetching the same zip every few hours.
+
+- **Restart to update appears when it is ready** (`static/js/fx.js`). The
+  window asked the update state once on load and then every ten minutes, and
+  the first check only runs a few seconds after the window opens, so the
+  banner could be ten minutes late on a window somebody had open for five. It
+  asks every five seconds for the first minute now, then eases off.
+
+- **Discord Rich Presence** (`knoxpresence.py`, new). What KnoxMap is doing on
+  your Discord profile: Scooping data from osm, Mapping, Compiling, and
+  nothing once the run is over. Off until you turn it on with the switch in
+  the header - it is on show to everyone on your friends list - and it needs
+  no library: Discord's own client listens on a named pipe. It runs on its own
+  thread and fails quietly, so Discord being closed, restarting or refusing
+  the socket costs a map halfway through nothing at all.
+
 ## 1.4.7
 
 - **Rooms reachable, lit, and one flat to a front door**

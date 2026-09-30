@@ -254,6 +254,31 @@ def api_language(name: str):
     return jsonify({"file": safe, "strings": _language_strings(path) if path.is_file() else {}})
 
 
+@app.route("/api/discord", methods=["GET", "POST"])
+def api_discord():
+    """Whether to publish Discord Rich Presence, and switch it on or off.
+
+    Off unless asked for: presence tells everyone on somebody's friends list
+    what they are doing, which is not a thing to turn on for them.
+    """
+    import knoxpaths
+    import knoxpresence
+
+    if request.method == "POST":
+        want = bool((_json_body() or {}).get("on"))
+        config = knoxpaths.load_config()
+        config["discord_presence"] = want
+        with open(knoxpaths.CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        if not want:
+            knoxpresence.presence.clear()
+        log.info("discord rich presence %s", "on" if want else "off")
+    return jsonify({
+        "on": bool(knoxpaths.load_config().get("discord_presence", False)),
+        "available": bool(knoxpresence.app_id()),
+    })
+
+
 @app.route("/api/open-logs", methods=["POST"])
 def api_open_logs():
     return jsonify({"opened": knoxlog.open_folder(), "folder": str(knoxlog.LOG_DIR)})
@@ -310,6 +335,16 @@ _PROGRESS_LOCK = threading.Lock()
 def _set_progress(map_name: str, **fields) -> None:
     with _PROGRESS_LOCK:
         _PROGRESS.setdefault(map_name, {}).update(fields)
+    # Discord Rich Presence, if the player asked for it. It is a set on a
+    # background thread and nothing here waits on it: knoxpresence swallows
+    # its own errors so a Discord that is closed, restarting or not installed
+    # cannot interrupt a map halfway through.
+    if "stage" in fields:
+        try:
+            import knoxpresence
+            knoxpresence.stage(str(fields["stage"]), map_name)
+        except Exception:  # noqa: BLE001 - presence is never worth a failure
+            pass
 
 
 # Maps the window has asked to stop. A long job looks at this between the

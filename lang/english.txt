@@ -66,6 +66,7 @@ Could not restart = Could not restart
 Could not save that file = Could not save that file
 Dark = Dark
 Degrees to turn the whole area before it is built, on top of Straighten streets. Use it when the automatic angle picks the wrong grid. = Degrees to turn the whole area before it is built, on top of Straighten streets. Use it when the automatic angle picks the wrong grid.
+Discord status = Discord status
 Dismiss = Dismiss
 Download everything (.zip) = Download everything (.zip)
 Downloading map data = Downloading map data
@@ -163,6 +164,7 @@ Search for a place, or draw an area with the tools on the left. A search result'
 Select its real boundary instead of a box = Select its real boundary instead of a box
 Setup isn't finished = Setup isn't finished
 Setup.bat = Setup.bat
+Show what KnoxMap is doing on your Discord profile. Off unless you ask: it tells everyone on your friends list. = Show what KnoxMap is doing on your Discord profile. Off unless you ask: it tells everyone on your friends list.
 Single files = Single files
 Smallest building = Smallest building
 Something went wrong = Something went wrong

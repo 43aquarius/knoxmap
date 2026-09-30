@@ -35,6 +35,10 @@
   <span class="byline">real places as Project Zomboid maps &middot; by euclid80tr &middot; <a href="https://discord.gg/ePM8dSxPm7" target="_blank" rel="noopener">discord</a> &middot; <a href="#" id="reportLink">report a problem</a></span>
   <select id="language" class="language" data-no-translate
           title="The window's language. Copy lang/english.txt, translate it and name it after your language" hidden></select>
+  <label id="discordToggle" class="language" hidden
+         title="Show what KnoxMap is doing on your Discord profile. Off unless you ask: it tells everyone on your friends list.">
+    <input type="checkbox" id="discordPresence" /> <span>Discord status</span>
+  </label>
   <span id="updateNote" class="update-note" hidden></span>
 </header>
 
@@ -252,5 +256,6 @@
 <script src="/static/js/fx.js"></script>
 <script src="/static/js/app.js"></script>
 <script src="/static/js/i18n.js"></script>
+<script src="/static/js/discord.js"></script>
 </body>
 </html>
