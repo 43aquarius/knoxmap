@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.8
+## 1.4.7.2
 
 - **The copies stranded by the old updater update themselves after all**
   (`.github/workflows/release.yml`). 1.4.7.1 fixed the unpacking, but the
