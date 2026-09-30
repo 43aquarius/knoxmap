@@ -40,6 +40,18 @@ log = knoxlog.log
 # Rich Presence -> Art Assets in the Discord developer portal.
 DEFAULT_APP_ID = "1554593562010845275"
 
+# The art asset uploaded under Rich Presence -> Art Assets. Discord matches
+# large_image against the name it was uploaded under, so one uploaded as
+# anything else shows no logo at all and says nothing about why. An
+# application's art assets are public - this needs no token - so the id is
+# looked up once and sent instead of the name, which works whatever it was
+# called and survives it being renamed. The name is only the preference when
+# there are several; the fallback is the first asset there is, and then the
+# name itself, which is what it always sent.
+ASSET_PREFERRED = "knoxmap"
+ASSETS_URL = "https://discord.com/api/v9/oauth2/applications/{app}/assets"
+ASSET_TTL_S = 3600.0
+
 # Discord refuses updates faster than about one every 15 seconds and drops
 # the rest, so a build that reports every tile would mostly be talking to
 # itself. The last state is kept and sent when the window opens again.
@@ -48,6 +60,56 @@ MIN_GAP_S = 15.0
 RETRY_S = 60.0
 
 _HANDSHAKE, _FRAME, _CLOSE = 0, 1, 2
+
+_asset_cache: dict = {"at": 0.0, "image": None}
+_asset_lock = threading.Lock()
+
+
+def large_image() -> str:
+    """The art asset id to show, or the plain name if it cannot be looked up.
+
+    Called from the presence thread only: it makes one HTTP request an hour
+    at most and must never sit in front of anything the window is doing.
+    """
+    with _asset_lock:
+        fresh = time.time() - _asset_cache["at"] < ASSET_TTL_S
+        if fresh and _asset_cache["image"]:
+            return _asset_cache["image"]
+    # Set outright when the lookup cannot be reached - some networks block
+    # discord.com - with the id from
+    # discord.com/api/v9/oauth2/applications/<app>/assets, which any browser
+    # can open: "discord_asset" in knoxmap_config.json, or
+    # KNOXMAP_DISCORD_ASSET.
+    fixed = os.environ.get("KNOXMAP_DISCORD_ASSET", "").strip()
+    if not fixed:
+        try:
+            fixed = str(knoxpaths.load_config().get("discord_asset", "") or "").strip()
+        except Exception:  # noqa: BLE001 - a broken config is not worth a crash
+            fixed = ""
+    if fixed:
+        with _asset_lock:
+            _asset_cache.update(at=time.time(), image=fixed)
+        return fixed
+    found = ASSET_PREFERRED
+    try:
+        import requests
+
+        r = requests.get(ASSETS_URL.format(app=app_id()),
+                         headers={"User-Agent": "KnoxMap"}, timeout=10)
+        r.raise_for_status()
+        assets = [a for a in r.json() if a.get("id")]
+        if not assets:
+            log.debug("discord: the application has no art assets uploaded")
+        else:
+            pick = next((a for a in assets
+                         if (a.get("name") or "").lower() == ASSET_PREFERRED), assets[0])
+            found = str(pick["id"])
+            log.debug("discord: art asset %r is %s", pick.get("name"), found)
+    except Exception as exc:  # noqa: BLE001 - offline, blocked, anything
+        log.debug("discord: could not read the art assets (%s)", exc)
+    with _asset_lock:
+        _asset_cache.update(at=time.time(), image=found)
+    return found
 
 
 def app_id() -> str:
@@ -227,10 +289,10 @@ class Presence:
         """Say what the player is doing. Cheap, and safe from any thread."""
         if not enabled():
             return
-        activity = {
-            "details": details[:128],
-            "assets": {"large_image": "knoxmap", "large_text": "KnoxMap"},
-        }
+        # The artwork is added on the presence thread, where looking it up is
+        # allowed to take a moment; what is compared against what was last
+        # sent stays this dict, so adding it never looks like a change.
+        activity = {"details": details[:128]}
         if state:
             activity["state"] = state[:128]
         if keep_start:
@@ -279,9 +341,19 @@ class Presence:
             # A fresh connection has nothing on it, so resend whatever the
             # state is rather than trusting what was sent down the old one.
             self._sent = object()          # never equal to an activity dict
-        self._pipe.activity(want)
+        self._pipe.activity(self._with_artwork(want))
         self._sent = want
         self._sent_at = now
+
+    @staticmethod
+    def _with_artwork(activity: dict | None) -> dict | None:
+        """`activity` with the logo on it, looked up here and not by the
+        caller: this runs on the presence thread, which is allowed to wait."""
+        if not activity:
+            return activity
+        out = dict(activity)
+        out["assets"] = {"large_image": large_image(), "large_text": "KnoxMap"}
+        return out
 
     def close(self) -> None:
         self._stop.set()

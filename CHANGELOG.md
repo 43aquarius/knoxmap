@@ -1,6 +1,18 @@
 # Changelog
 
-## 1.4.7.2
+## 1.4.7.3
+
+- **The logo on the Discord presence** (`knoxpresence.py`). `large_image` was
+  the plain name "knoxmap", which Discord matches against the name the art
+  asset was uploaded under - one uploaded as anything else shows no logo and
+  says nothing about why. KnoxMap reads the application's art assets instead,
+  which are public and need no token, and sends the asset's id: that works
+  whatever it was named and survives a rename. If the lookup cannot be
+  reached - some networks block discord.com - it falls back to the name as
+  before, and `"discord_asset"` in `knoxmap_config.json` (or
+  KNOXMAP_DISCORD_ASSET) sets the id outright. The lookup runs on the
+  presence thread, once an hour at most, and never in front of the window.
+
 
 - **The copies stranded by the old updater update themselves after all**
   (`.github/workflows/release.yml`). 1.4.7.1 fixed the unpacking, but the
