@@ -81,6 +81,15 @@ def audit(building, kind):
         n = len(s.rooms)
         adj = {i: set() for i in range(1, n + 1)}
         fronts = Counter()
+        # A gap in a wall is a way through as much as a door is: a mall unit
+        # stands open to the concourse, which is how Knox County's does it -
+        # 584 boundary squares between its units and the hall and not one door
+        # among them.
+        for x, y, d in getattr(s, "open_edge", ()):
+            pair = door_pair(s, (x, y, d))
+            if pair and all(pair) and pair[0] != pair[1]:
+                adj[pair[0]].add(pair[1])
+                adj[pair[1]].add(pair[0])
         for door in s.doors:
             pair = door_pair(s, door)
             if not pair or not all(pair) or pair[0] == pair[1]:

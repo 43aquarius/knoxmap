@@ -1752,6 +1752,84 @@ def _atrium_railings(plan: Plan) -> None:
     # (_place_windows), which skips these edges; nothing is on them yet here.
 
 
+# How much of a unit's frontage stands open to the concourse. Knox County's
+# mall has no door at all between a unit and the hall: of 584 boundary
+# squares, 305 are wall and 279 are simply open, which is how a shop is
+# entered there.
+# The rooms in a mall that stand open to the concourse. A lavatory, the
+# centre office and the storerooms behind the units keep their wall and door.
+GLAZED_UNITS = {"clothesstore", "shoestore", "sewingstore", "electronicsstore",
+                "housewarestore", "cornerstore", "optometrist", "departmentstore",
+                "giftstore", "toystore", "bookstore", "furniturestore",
+                "sportstore", "jewelrystore", "musicstore", "candystore",
+                "toolstore", "pharmacy", "generalstore", "gunstore", "bakery",
+                "cafe", "foodcourt", "grocery", "conveniencestore"}
+SHOP_OPENING = 0.45
+MIN_OPENING = 3
+
+
+def _open_shopfronts(plan: Plan) -> None:
+    """Open a run of each unit's frontage, and take its door off it."""
+    concourse = {i for i, r in enumerate(plan.rooms, start=1)
+                 if r.kind == "concourse"}
+    if not concourse:
+        return
+    h, w = len(plan.grid), len(plan.grid[0])
+    runs: dict = {}
+    frontage: dict = {}
+    for y in range(h):
+        for x in range(w):
+            here = plan.grid[y][x]
+            if not here:
+                continue
+            for nx, ny, d in ((x - 1, y, "W"), (x, y - 1, "N")):
+                if not (0 <= nx < w and 0 <= ny < h):
+                    continue
+                there = plan.grid[ny][nx]
+                if not there or there == here:
+                    continue
+                pair = {here, there}
+                if not pair & concourse:
+                    continue
+                unit = (pair - concourse)
+                if not unit:
+                    continue
+                idx = next(iter(unit))
+                if plan.rooms[idx - 1].kind not in GLAZED_UNITS:
+                    continue
+                runs.setdefault((idx, d, x if d == "W" else y), []).append(
+                    y if d == "W" else x)
+                frontage.setdefault(idx, set()).add((x, y, d))
+    opened = set()
+    got_opening: set = set()
+    for (idx, d, fixed), along in runs.items():
+        along.sort()
+        spans, run = [], [along[0]]
+        for t in along[1:]:
+            if t == run[-1] + 1:
+                run.append(t)
+            else:
+                spans.append(run); run = [t]
+        spans.append(run)
+        best = max(spans, key=len)
+        if len(best) < MIN_OPENING:
+            continue
+        width = max(MIN_OPENING, round(len(best) * SHOP_OPENING))
+        start = best[0] + (len(best) - width) // 2
+        for t in range(start, start + width):
+            opened.add((fixed, t, d) if d == "W" else (t, fixed, d))
+        got_opening.add(idx)
+    plan.open_edge |= opened
+    # A gap in the wall is the way in, and that is the only way in: the game's
+    # mall has not one door between a shop and the concourse, so a unit with
+    # an opening gives up every door along its frontage, not just the ones
+    # the gap swallowed.
+    shut = set(opened)
+    for idx in got_opening:
+        shut |= frontage.get(idx, set())
+    plan.doors = [e for e in plan.doors if e not in shut]
+
+
 def _merge_concourse(plan: Plan) -> None:
     """Make the whole concourse one room, so no wall runs across it.
 
@@ -2965,7 +3043,7 @@ def _place_windows(building: "Building", kind: str | None,
             # Never across the hole in a mall floor. That edge is a railing
             # over the concourse below, and glazing it put windows in mid-air
             # inside the building.
-            if edge in storey.railing:
+            if edge in storey.railing or edge in storey.open_edge:
                 return
             storey.windows.append(edge)
             placed.append(edge)
@@ -3351,13 +3429,17 @@ def _furnish(plan: Plan, rng: random.Random,
     wishlists, and even there it was written to the floor rather than a wall.
     """
     door_tiles: set[tuple[int, int]] = set()
-    door_edges = set(plan.doors)
+    # An opened shopfront is a way in just as much as a door, so it gets a
+    # door's clearance. The game's mall keeps its openings empty; ours had a
+    # shelf or a chiller across 64% of them, which is no way into a shop.
+    ways_in = list(plan.doors) + sorted(plan.open_edge)
+    door_edges = set(plan.doors) | set(plan.open_edge)
     # The lift doors take their stretch of wall: nothing hangs on it.
     if plan.shaft_door is not None:
         lx, ly, ld = plan.shaft_door
         door_edges |= {(lx, ly + i, "W") if ld == "W" else (lx + i, ly, "N")
                        for i in range(SHAFT_SIZE)}
-    for x, y, d in plan.doors:
+    for x, y, d in ways_in:
         # Two tiles deep either side: one clear tile in front of a door still
         # had a fridge or a bookcase on the next, and nobody could step past.
         for k in range(DOOR_CLEAR_DEPTH):
@@ -4679,10 +4761,114 @@ def build_plan(width: int, height: int, commercial: bool = False,
             # Each shop its own street door, before the shop is fitted out
             # round it.
             _shop_doors(plan, street)
+    if mix_kind == "mall":
+        # Before furnishing: the openings have to exist for _furnish to keep
+        # them clear.
+        _open_shopfronts(plan)
     _furnish(plan, rng, stairs, street)
     if mix_kind == "mall":
         _clear_concourse(plan)
+        # Nothing hangs on a railing or on an opened shopfront: a light or a
+        # picture left on the edge of an opening stood in mid-air. A piece
+        # records the tile it stands on and the way it faces, so the wall it
+        # hangs on is _wall_edge of the two - matching the tile itself missed
+        # every piece facing east or south and left 27 of them hanging, where
+        # the game's own mall has none.
+        edges = plan.railing | plan.open_edge
+        kept, unlit = [], set()
+        for role, x, y, d in plan.furniture:
+            # The lift doors stay whatever they sit on: they are the only way
+            # off a floor, and a lift shaft is never on an opened shopfront.
+            if role.startswith("elevator_door"):
+                kept.append((role, x, y, d))
+                continue
+            nb = ((x - 1, y) if d == "W" else (x, y - 1) if d == "N"
+                  else (x + 1, y) if d == "E" else (x, y + 1))
+            # Only what hangs on a wall needs one. Most of a shop stands on
+            # the floor and keeps its place whatever is behind it; requiring a
+            # wall for everything threw out half the fittings in the mall.
+            # The catalog says which is which - plan.wall_pieces only records
+            # what _furnish hung itself, and a shop's own wishlist puts up
+            # mirrors that never go through it.
+            if nb not in plan.void and (
+                    not _is_wall_piece(role)
+                    or _hangs_on_wall(plan, role, x, y, d, edges)):
+                kept.append((role, x, y, d))
+                continue
+            if role == SWITCH:
+                unlit.add(_room_at(plan, x, y))
+        plan.furniture = kept
+        # The game lights a room from the switch inside it, so one that lost
+        # its only switch to an opening is re-wired onto a wall it still has.
+        _relight(plan, unlit, edges)
     return plan
+
+
+def _hangs_on_wall(plan: Plan, role: str, x: int, y: int, d: str,
+                   edges: set) -> bool:
+    """Is there really a wall for a piece on (x, y) facing `d` to hang on?
+
+    A wall stands between two different rooms, or at the building's edge.
+    Matching the opened shopfronts alone was not enough: a picture hung on a
+    line inside one room - where the two sides are the same room and no wall
+    was ever drawn - stood in open space just the same. Every tile the piece
+    covers has to have one, not just the tile it is anchored on: a two-tile
+    display with a wall at one end and the opening at the other left half of
+    itself hanging.
+    """
+    try:
+        cells = _cells_for(role, x, y, d)
+    except KeyError:
+        cells = [(x, y)]
+    for cx, cy in cells:
+        ex, ey, ed = _wall_edge(cx, cy, d)
+        if (ex, ey, ed) in edges:
+            return False
+        near = (ex, ey)
+        far = (ex - 1, ey) if ed == "W" else (ex, ey - 1)
+        if near in plan.void or far in plan.void:
+            return False
+        a, b = _room_at(plan, *near), _room_at(plan, *far)
+        if a == b:
+            return False
+        # Two rooms of the same kind go into the game under the same name,
+        # and the game merges rooms by name and draws no wall between them -
+        # so a mirror hung where two shoe shops meet had nothing behind it.
+        if a and b and plan.rooms[a - 1].kind == plan.rooms[b - 1].kind:
+            return False
+    return True
+
+
+def _relight(plan: Plan, unlit: set, edges: set) -> None:
+    """Hang a switch back in any room that lost its only one to an opening."""
+    have = {_room_at(plan, x, y) for role, x, y, _d in plan.furniture
+            if role == SWITCH}
+    taken = {_wall_edge(x, y, d) for _r, x, y, d in plan.furniture}
+    for idx in sorted(unlit - have):
+        if not idx:
+            continue
+        done = False
+        for y in range(plan.height):
+            for x in range(plan.width):
+                if done or plan.grid[y][x] != idx:
+                    continue
+                for facing in ("N", "W", "S", "E"):
+                    edge = _wall_edge(x, y, facing)
+                    if edge in edges or edge in taken:
+                        continue
+                    nb = ((x, y - 1) if facing == "N" else
+                          (x - 1, y) if facing == "W" else
+                          (x, y + 1) if facing == "S" else (x + 1, y))
+                    # A wall stands where the far side is a different room or
+                    # the outside; not across the hole, which has none.
+                    if _room_at(plan, *nb) == idx or nb in plan.void:
+                        continue
+                    plan.furniture.append((SWITCH, x, y, _facing(SWITCH, facing)))
+                    taken.add(edge)
+                    done = True
+                    break
+            if done:
+                break
 
 
 def _largest_rectangle(todo: list[list[bool]]) -> tuple[int, int, int, int] | None:

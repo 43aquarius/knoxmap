@@ -2,6 +2,33 @@
 
 ## 1.4.8
 
+- **Shops you walk into, with nothing in the way** (`knoxbuild/layout.py`,
+  `tools/audit_layouts.py`). Knox County's mall has 853 squares where a unit
+  meets the concourse: 44% of them are open, 40% wall, 15% glass, and not one
+  is a door. Ours put a door on every unit, so each shop opens through a gap
+  in its frontage now and gives up its doors along it; the lavatories, the
+  centre office and the storerooms keep theirs, as the game's do. Openings are
+  cut before the units are fitted out rather than after, and count as a way in
+  the way a door does, so they get a door's two-tile clearance - cutting them
+  afterwards left a shelf, a counter or a chiller standing across 64% of the
+  entrances, against the game's 0.
+
+  Nothing hangs on an opening either. A piece records the tile it stands on
+  and the way it faces, so the wall it hangs on is _wall_edge of the two, not
+  the tile itself - matching the tile left everything facing east or south
+  behind. Every tile a piece covers has to have a wall, not just the one it is
+  anchored on, or a two-tile mirror kept half of itself in mid-air; two rooms
+  of the same kind go into the game under one name, and the game merges rooms
+  by name and draws no wall between them, so that counts as no wall. Which
+  pieces need one comes from the catalog's WallFurniture layer: plan.wall_pieces
+  only records what _furnish hung itself, and a shop's own wishlist puts up
+  mirrors that never go through it. Requiring a wall for everything instead
+  threw out half the mall's fittings, since most of a shop stands on the floor.
+  Wall fittings left hanging on nothing: 31 before, 6 now, against the game's
+  own mall at 0. A room that loses its only light switch to an opening is
+  re-wired onto a wall it still has, and the lift doors are left alone.
+  Windows keep off an opening as they already did off a railing.
+
 - **Escalators along the opening, and a floor you can tell from the other**
   (`knoxbuild/catalog.py`, `knoxbuild/layout.py`, `knoxbuild/tbx.py`). The
   east-west escalator is a different block of the sheet from the north-south
