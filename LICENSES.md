@@ -14,7 +14,7 @@ it. These files come from it (most have since been modified here):
 `static/css/app.css` · `static/js/app.js` ·
 `templates/index.html` · `test_pipeline.py` · `.gitignore`
 
-The KnoxMap logo and cover (`branding/*`, `static/logo.svg`) are new to this
+The KnoxMap logo and cover (`branding/*`, `static/logo.png`) are new to this
 fork and replace Knoxify's own artwork; they are under the MIT licence below.
 
 If you want to reuse

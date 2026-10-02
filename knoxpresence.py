@@ -99,14 +99,15 @@ def large_image() -> str:
         r.raise_for_status()
         assets = [a for a in r.json() if a.get("id")]
         if not assets:
-            log.debug("discord: the application has no art assets uploaded")
+            log.warning("discord: the application has no art assets uploaded - "
+                        "the logo cannot show until one is")
         else:
             pick = next((a for a in assets
                          if (a.get("name") or "").lower() == ASSET_PREFERRED), assets[0])
             found = str(pick["id"])
-            log.debug("discord: art asset %r is %s", pick.get("name"), found)
+            log.info("discord: art asset %r is %s", pick.get("name"), found)
     except Exception as exc:  # noqa: BLE001 - offline, blocked, anything
-        log.debug("discord: could not read the art assets (%s)", exc)
+        log.warning("discord: could not read the art assets (%s)", exc)
     with _asset_lock:
         _asset_cache.update(at=time.time(), image=found)
     return found
@@ -253,7 +254,7 @@ class _Pipe:
         if op is None:
             raise OSError("discord closed the connection")
         if (data or {}).get("evt") == "ERROR":
-            log.debug("discord refused the activity: %s", (data or {}).get("data"))
+            log.warning("discord refused the activity: %s", (data or {}).get("data"))
 
     def close(self) -> None:
         for handle in (self._f, self._sock):

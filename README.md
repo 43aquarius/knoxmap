@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="branding/logo.svg" width="130" alt="KnoxMap logo"/>
+  <img src="branding/logo.png" width="130" alt="KnoxMap logo"/>
 </p>
 
 <h1 align="center">KnoxMap</h1>

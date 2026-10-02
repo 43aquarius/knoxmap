@@ -2,6 +2,22 @@
 
 ## 1.4.8
 
+- **A new logo** (`branding/`, `static/logo.png`, `templates/index.html`,
+  `README.md`). The map pin is now a zombie's head standing on the same
+  isometric tile, over a house. It is 128px pixel art in 42 colours, so the
+  512 master is a 4x nearest-neighbour blow-up and every edge stays hard; the
+  .ico carries 16 to 256, with 256 a clean 2x and the sizes that are not whole
+  divisions resampled. The window serves a .png now rather than the old .svg.
+  Discord keeps its own copy of the art, uploaded to the application, so the
+  presence logo only changes when that copy is replaced.
+
+- **Discord says why there is no logo** (`knoxpresence.py`). The art asset is
+  looked up by id and falls back to the name "knoxmap" when the lookup cannot
+  be reached, which shows nothing unless the asset happens to carry that name -
+  and every line that said so was log.debug against a logger set to INFO, so
+  none of them were ever written, including Discord's own refusal, whose
+  comment says it is worth a line in the log. They are info and warning now.
+
 - **Shops you walk into, with nothing in the way** (`knoxbuild/layout.py`,
   `tools/audit_layouts.py`). Knox County's mall has 853 squares where a unit
   meets the concourse: 44% of them are open, 40% wall, 15% glass, and not one
