@@ -176,7 +176,11 @@ if sys.platform == "win32":
                 length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
                 buf = ctypes.create_unicode_buffer(length + 1)
                 ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
-                title = buf.value
+                title = buf.value.strip()
+                
+                # Ignore windows with no title, or known progress dialogs
+                if not title or title == "Generate Lots":
+                    return True
                 
                 now = time.time()
                 if hwnd not in seen_times:
