@@ -25,18 +25,22 @@ if not defined PY call :portable_python || goto :fail
 
 rem An environment built by a 32-bit Python stays 32-bit, so a copy set up
 rem before this check is made again with the one found above.
-if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" -c "import sys; sys.exit(sys.maxsize <= 2**32)" >nul 2>nul || call :rebuild_venv
+set VENV_PYTHON=".venv\Scripts\python.exe"
+if exist ".venv\bin\python.exe" call :msys_warning
+
+if exist %VENV_PYTHON% (
+  %VENV_PYTHON% -c "import sys; sys.exit(sys.maxsize <= 2**32)" >nul 2>nul || call :rebuild_venv
 )
 
-if not exist ".venv\Scripts\python.exe" (
+if not exist %VENV_PYTHON% (
   echo Creating the Python environment...
   %PY% -m venv .venv || goto :fail
+  if exist ".venv\bin\python.exe" call :msys_warning
 )
 echo Installing Python packages...
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r requirements.txt || goto :fail
+%VENV_PYTHON% -m pip install --disable-pip-version-check -q -r requirements.txt || goto :fail
 
-".venv\Scripts\python.exe" knoxmap_setup.py || goto :fail
+%VENV_PYTHON% knoxmap_setup.py || goto :fail
 echo.
 if not "%KNOXMAP_NO_PAUSE%"=="1" pause
 exit /b 0
@@ -94,6 +98,22 @@ if defined PY32 (
   echo Carrying on with the 32-bit Python on this PC. Maps of more than a few
   echo square kilometres may run out of memory.
   set PY=%PY32%
-  exit /b 0
+    exit /b 0
 )
 exit /b 1
+
+:msys_warning
+echo.
+echo WARNING: MSYS/Cygwin Python environment detected (unix-style bin folder).
+echo This can be unstable or fail to install packages properly.
+set /p "INSTALL_CORRECT=Do you want the correct Python version to be downloaded and installed? (y/n): "
+if /I "%INSTALL_CORRECT%"=="y" (
+    rmdir /s /q ".venv"
+    call :portable_python
+    echo Creating the Python environment...
+    %PY% -m venv .venv
+    set VENV_PYTHON=".venv\Scripts\python.exe"
+) else (
+    set VENV_PYTHON=".venv\bin\python.exe"
+)
+exit /b 0
