@@ -1578,9 +1578,12 @@ def check_standing(check) -> None:
     from knoxbuild import layout as L
 
     missed = [r for r in C.FURNITURE
-              if "sink" in r and C.FURNITURE_LAYERS.get(r, "Furniture") == "Furniture"
+              if "sink" in r and r != "sink_public"
+              and C.FURNITURE_LAYERS.get(r, "Furniture") == "Furniture"
               and not L._needs_surface(r)]
     check(not missed, f"every sink knows it needs a worktop ({missed or 'all do'})")
+    check(not L._needs_surface("sink_public"),
+          "a public pedestal basin stands without a counter")
 
     # Every room name we write has to be one the game knows, or nothing
     # spawns in it. "cells" was the only one that was not: Knox County has 540

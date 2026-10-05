@@ -3,6 +3,7 @@
 Output contract (per the Mapping Guide):
   <name>.bmp              — landscape (11 palette colors)
   <name>_veg.bmp          — vegetation (must be same size as landscape)
+    <name>_road_hierarchy.bmp — grayscale OSM road class across right-of-way
   <name>_ZombieSpawnMap.bmp — grayscale, 1/10th resolution
 
 Dimensions are snapped up to the next multiple of 300 (PZ cell size). The
@@ -25,7 +26,9 @@ import knoxstop
 
 from . import pz_colors as C
 from . import structures
-from .osm import FENCE_BARRIERS, OSMFeature, classify
+from .osm import (FENCE_BARRIERS, OSMFeature, ROAD_HIERARCHY_BY_CODE,
+                  ROAD_HIERARCHY_CODES,
+                  classify, road_hierarchy)
 
 
 # --- projection ------------------------------------------------------------
@@ -217,7 +220,7 @@ def _clip_to_shape(landscape: Image.Image, shape, buckets: dict[str, list[OSMFea
         for feat in buckets.get(cat, []):
             if _is_polygon(feat):
                 continue
-            width = (_way_width_m(feat, cat) + 2 * SIDEWALK_M[cat]) / mpt
+            width = (_way_width_m(feat, cat) + 2 * _sidewalk_width_m(feat, cat)) / mpt
             _draw_line(kd, _feature_coords_px(feat, proj), 255, int(width))
     for cat in ("water", "pool", "coastline"):
         for feat in buckets.get(cat, []):
@@ -372,6 +375,11 @@ ROAD_WIDTHS_M = {
     "pier": 3.0,
     "railway": 4.0,
 }
+ROAD_WIDTHS_BY_HIERARCHY_M = {
+    "motorway": 24.0, "trunk": 16.0, "primary": 12.0,
+    "secondary": 9.0, "tertiary": 7.0, "residential": 6.0,
+    "service": 3.5, "footway": 2.5,
+}
 
 # Metres of kerb either side. Town streets in the vanilla game sit in a band of
 # pale concrete; without it the asphalt runs straight into grass and every road
@@ -388,6 +396,26 @@ VERGE_M = {
     "road_medium": 1.5,
     "road_minor": 1.5,
 }
+SIDEWALK_BY_HIERARCHY_M = {
+    "motorway": 0.0, "trunk": 1.5, "primary": 2.5,
+    "secondary": 2.5, "tertiary": 2.5, "residential": 2.5,
+    "service": 0.5,
+}
+VERGE_BY_HIERARCHY_M = {
+    "motorway": 0.0, "trunk": 0.0, "primary": 0.0,
+    "secondary": 0.5, "tertiary": 1.0, "residential": 1.5,
+    "service": 0.0,
+}
+
+
+def _sidewalk_width_m(feat: OSMFeature, cat: str) -> float:
+    return SIDEWALK_BY_HIERARCHY_M.get(road_hierarchy(feat.tags),
+                                      SIDEWALK_M.get(cat, 0.0))
+
+
+def _verge_width_m(feat: OSMFeature, cat: str) -> float:
+    return VERGE_BY_HIERARCHY_M.get(road_hierarchy(feat.tags),
+                                    VERGE_M.get(cat, 0.0))
 
 LANDSCAPE_FILL = {
     "water": C.WATER,
@@ -442,7 +470,8 @@ VEG_CATEGORIES = {"forest", "scrub", "tree_single", "hedge", "orchard",
 
 def _way_width_m(feat: OSMFeature, cat: str) -> float:
     """Carriageway width for this way, from its own tags where it has them."""
-    base = ROAD_WIDTHS_M[cat]
+    base = ROAD_WIDTHS_BY_HIERARCHY_M.get(road_hierarchy(feat.tags),
+                                         ROAD_WIDTHS_M[cat])
     raw = feat.tags.get("width") or feat.tags.get("est_width")
     if raw:
         # OSM widths are metres unless suffixed; "7", "7 m" and "7.5" all occur.
@@ -487,6 +516,25 @@ def _is_polygon(feat: OSMFeature) -> bool:
     if feat.kind == "way" and len(feat.geometry) >= 3:
         return feat.geometry[0] == feat.geometry[-1]
     return False
+
+
+def _road_hierarchy_image(buckets: dict[str, list[OSMFeature]], proj: Projector) -> Image.Image:
+    """Rasterize road class over the right-of-way for downstream map passes."""
+    image = Image.new("L", (proj.width, proj.height), 0)
+    draw = ImageDraw.Draw(image)
+    road_buckets = ("road_service", "road_minor", "road_medium", "road_major",
+                    "paved_path", "dirt_path")
+    for hierarchy, code in sorted(ROAD_HIERARCHY_CODES.items(), key=lambda item: item[1]):
+        for cat in road_buckets:
+            for feat in buckets.get(cat, []):
+                if _is_polygon(feat) or road_hierarchy(feat.tags) != hierarchy:
+                    continue
+                width = _way_width_m(feat, cat)
+                if cat in ROAD_WIDTHS_M:
+                    width += 2 * _sidewalk_width_m(feat, cat)
+                _draw_line(draw, _feature_coords_px(feat, proj), code,
+                           max(1, int(width / proj.meters_per_tile)))
+    return image
 
 
 def _paint_multipolygon(image: Image.Image, feat: OSMFeature, proj: Projector,
@@ -658,18 +706,19 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
             # use: painted first, a park or a lawn mapped up to the kerb erased
             # the pavement and the tarmac met the grass. One pass so a side
             # street's pavement cannot cut across the high street it joins.
-            for road in ("road_minor", "road_medium", "road_major"):
-                margin = SIDEWALK_M[road]
+            for road in ("road_service", "road_minor", "road_medium", "road_major"):
                 for feat in buckets.get(road, []):
                     if _is_polygon(feat):
                         continue
+                    margin = _sidewalk_width_m(feat, road)
                     width_px = (_way_width_m(feat, road) + 2 * margin) / meters_per_tile
                     _draw_line(l_draw, ground_rings(feat),
                                C.PALE_CONCRETE, int(width_px))
-            for road, verge in VERGE_M.items():
+            for road in ("road_service", "road_minor", "road_medium", "road_major"):
                 for feat in buckets.get(road, []):
                     if _is_polygon(feat):
                         continue
+                    verge = _verge_width_m(feat, road)
                     width_px = (_way_width_m(feat, road) + 2 * verge) / meters_per_tile
                     _draw_line(l_draw, ground_rings(feat),
                                C.DARK_GRASS, int(width_px))
@@ -707,7 +756,8 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     _paint_wild_growth(vegetation, landscape, proj, density=tree_density)
     _clear_building_vegetation(vegetation, building_feats, proj)
     _paint_road_details(vegetation, landscape, buckets, proj)
-    _paint_street_furniture(vegetation, landscape)
+    road_hierarchy = _road_hierarchy_image(buckets, proj)
+    _paint_street_furniture(vegetation, landscape, road_hierarchy)
     # Nothing grows through a deck or a ramp, and no lamp stands on one.
     veg_px = vegetation.load()
     for x, y in lifted.clear_veg:
@@ -732,6 +782,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     os.makedirs(output_dir, exist_ok=True)
     landscape_path = os.path.join(output_dir, f"{map_name}.bmp")
     veg_path = os.path.join(output_dir, f"{map_name}_veg.bmp")
+    road_hierarchy_path = os.path.join(output_dir, f"{map_name}_road_hierarchy.bmp")
     spawn_path = os.path.join(output_dir, f"{map_name}_ZombieSpawnMap.bmp")
     preview_path = os.path.join(output_dir, f"{map_name}_preview.png")
     buildings_path = os.path.join(output_dir, f"{map_name}_buildings.geojson")
@@ -739,6 +790,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
 
     landscape.save(landscape_path, format="BMP")
     vegetation.save(veg_path, format="BMP")
+    road_hierarchy.save(road_hierarchy_path, format="BMP")
     # The ground as drawn, before knoxbuild paints front paths into it
     # (knoxbuild/yards.py), so building again starts from clean ground.
     landscape.save(os.path.join(output_dir, f"{map_name}_ground_base.bmp"), format="BMP")
@@ -1102,6 +1154,16 @@ LAMP_EVERY = 26
 # Tiles only), with the limit going by how wide the carriageway is.
 SPEED_SIGN_EVERY = 90
 SPEED_BY_WIDTH = ((12, 45), (8, 35), (0, 25))
+ROAD_FURNITURE_INTERVALS = {
+    "motorway": {"lamp": 55, "hydrant": 1 << 30, "speed": 55, "drain": 40},
+    "trunk": {"lamp": 40, "hydrant": 100, "speed": 70, "drain": 36},
+    "primary": {"lamp": 32, "hydrant": 75, "speed": 85, "drain": 34},
+    "secondary": {"lamp": 26, "hydrant": 65, "speed": 105, "drain": 34},
+    "tertiary": {"lamp": 23, "hydrant": 60, "speed": 130, "drain": 34},
+    "residential": {"lamp": 20, "hydrant": 55, "speed": 170, "drain": 34},
+    "service": {"lamp": 40, "hydrant": 120, "speed": 1 << 30, "drain": 42},
+    "footway": {"lamp": 28, "hydrant": 1 << 30, "speed": 1 << 30, "drain": 1 << 30},
+}
 
 
 def _mod_tiles_ready() -> bool:
@@ -1123,7 +1185,8 @@ HYDRANT_EVERY = 70
 DRAIN_EVERY = 34
 
 
-def _paint_street_furniture(veg: Image.Image, landscape: Image.Image) -> dict:
+def _paint_street_furniture(veg: Image.Image, landscape: Image.Image,
+                            road_hierarchy: Image.Image | None = None) -> dict:
     """Lamps, hydrants and drains along the kerbs; grime, cracks and litter.
 
     A generated street was clean tarmac, kerb and pavement and nothing else;
@@ -1138,6 +1201,8 @@ def _paint_street_furniture(veg: Image.Image, landscape: Image.Image) -> dict:
     ground = np.asarray(landscape.convert("RGB"))
     vp = np.array(veg.convert("RGB"))
     h, w = ground.shape[:2]
+    road_classes = (np.asarray(road_hierarchy.convert("L"))
+                    if road_hierarchy is not None else None)
 
     def is_colour(arr, colours):
         mask = np.zeros(arr.shape[:2], dtype=bool)
@@ -1147,7 +1212,11 @@ def _paint_street_furniture(veg: Image.Image, landscape: Image.Image) -> dict:
 
     empty = np.all(vp == 0, axis=2)
     asphalt = is_colour(ground, (C.MEDIUM_ASPHALT, C.DARKEST_ASPHALT))
+    driveable = is_colour(ground, (C.MEDIUM_ASPHALT, C.DARK_ASPHALT,
+                                  C.DARKEST_ASPHALT))
     pavement = is_colour(ground, (C.PALE_CONCRETE,))
+    roadside = pavement | is_colour(
+        ground, (C.DARK_GRASS, C.MEDIUM_GRASS, C.LIGHT_GRASS, C.PAVING))
     counts = {}
 
     # Edge lines: tarmac with the road's edge on exactly one side and enough
@@ -1212,6 +1281,17 @@ def _paint_street_furniture(veg: Image.Image, landscape: Image.Image) -> dict:
             n += 1
         return n
 
+    def hierarchy_at(gx, gy, sx, sy):
+        if road_classes is None:
+            return None
+        for n in range(24):
+            x, y = gx - n * sx, gy - n * sy
+            if not (0 <= x < w and 0 <= y < h):
+                break
+            if asphalt[y, x] and road_classes[y, x]:
+                return ROAD_HIERARCHY_BY_CODE.get(int(road_classes[y, x]))
+        return None
+
     for edge, (sx, sy), lamp in straight:
         ys, xs = np.nonzero(np.all(vp == edge, axis=2))
         order = rng.permutation(len(xs))
@@ -1220,6 +1300,8 @@ def _paint_street_furniture(veg: Image.Image, landscape: Image.Image) -> dict:
             bx, by = gx + 2 * sx, gy + 2 * sy   # past the kerb or the verge
             if not (0 <= bx < w and 0 <= by < h):
                 continue
+            hierarchy = hierarchy_at(gx, gy, sx, sy)
+            spacing = ROAD_FURNITURE_INTERVALS.get(hierarchy, {})
             facing = speed_side.get(edge)
             speed = None
             if facing:
@@ -1227,10 +1309,10 @@ def _paint_street_furniture(veg: Image.Image, landscape: Image.Image) -> dict:
                 limit = next(v for width, v in SPEED_BY_WIDTH if across >= width)
                 speed = C.SPEED_SIGNS[(limit, facing)]
             for what, every, colour, at, need in (
-                    ("speed", SPEED_SIGN_EVERY, speed, (bx, by), None),
-                    ("lamp", LAMP_EVERY, lamp, (bx, by), None),
-                    ("hydrant", HYDRANT_EVERY, C.HYDRANT, (bx, by), None),
-                    ("drain", DRAIN_EVERY, C.STORM_DRAIN, (gx, gy), None)):
+                    ("speed", spacing.get("speed", SPEED_SIGN_EVERY), speed, (bx, by), None),
+                    ("lamp", spacing.get("lamp", LAMP_EVERY), lamp, (bx, by), None),
+                    ("hydrant", spacing.get("hydrant", HYDRANT_EVERY), C.HYDRANT, (bx, by), None),
+                    ("drain", spacing.get("drain", DRAIN_EVERY), C.STORM_DRAIN, (gx, gy), None)):
                 px, py = at
                 if colour is None or not (0 <= px < w and 0 <= py < h):
                     continue
@@ -1239,9 +1321,10 @@ def _paint_street_furniture(veg: Image.Image, landscape: Image.Image) -> dict:
                 cell = (px // every, py // every, facing if what == "speed" else None)
                 if cell in taken[what]:
                     continue
-                # A drain takes the gutter square from its edge line; a lamp
-                # or hydrant needs an empty square off the road.
-                if what != "drain" and (not empty[py, px] or asphalt[py, px]):
+                # A drain takes the gutter square from its edge line; other
+                # props need an empty sidewalk or verge tile, not a road or lot.
+                if what != "drain" and (not empty[py, px] or driveable[py, px]
+                                         or not roadside[py, px]):
                     continue
                 taken[what].add(cell)
                 out[py, px] = colour

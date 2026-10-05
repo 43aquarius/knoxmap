@@ -181,6 +181,7 @@ def _add(entries: list[dict], entry: dict | None) -> int:
     is not there yet; 0, BuildingEd's "none", for no entry."""
     if not entry:
         return 0
+    C._complete_window_cutouts(entry)
     if entry in entries:
         return entries.index(entry) + 1
     entries.append(entry)
@@ -232,6 +233,8 @@ def render_tbx(plan: Plan | Building, name: str,
     roof30 = False
 
     if style:
+        C._complete_window_cutouts(style["exterior"])
+        C._complete_window_cutouts(style["interior"])
         entries.append(style["exterior"])
         exterior_idx = len(entries)
         entries.append(style["interior"])

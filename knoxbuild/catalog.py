@@ -11534,6 +11534,25 @@ HOUSE_STYLES = [{'name': 'clapboard',
 # paints 4.48 different ones into a single building - a kitchen is not the
 # colour of the bedroom next door - and has 9 in all, which is what these are.
 # tbx.py deals a few of them out per room kind (INTERIOR_WALLS_PER_BUILDING).
+def _complete_window_cutouts(entry: dict | None) -> None:
+      """Give every wall style a cutout tile for each alternate window sprite."""
+      if not entry or entry.get("category") not in ("exterior_walls", "interior_walls"):
+            return
+      tiles = entry.get("tiles", {})
+      for side in ("West", "North"):
+            fallback = tiles.get(f"{side}Window") or tiles.get(side)
+            if fallback:
+                  for index in range(1, 20):
+                        tiles.setdefault(f"{side}Window{index}", fallback)
+
+
+for _entry in TILE_ENTRIES:
+    _complete_window_cutouts(_entry)
+for _style in HOUSE_STYLES:
+    _complete_window_cutouts(_style.get("exterior"))
+    _complete_window_cutouts(_style.get("interior"))
+
+
 def _interior_walls() -> list[dict]:
     out, seen = [], set()
     for style in HOUSE_STYLES:
@@ -11572,10 +11591,12 @@ def _wall_style(sheet: str, base: int) -> dict:
     """One (sheet, base) as an interior-wall tile-table entry."""
     def t(n: int) -> str:
         return f"{sheet}_{base + n:03d}"
-    return {"category": "interior_walls",
-            "tiles": {"West": t(0), "North": t(1), "NorthWest": t(2),
-                      "SouthEast": t(3), "WestWindow": t(8), "NorthWindow": t(9),
-                      "WestDoor": t(10), "NorthDoor": t(11)}}
+    entry = {"category": "interior_walls",
+             "tiles": {"West": t(0), "North": t(1), "NorthWest": t(2),
+                       "SouthEast": t(3), "WestWindow": t(8), "NorthWindow": t(9),
+                       "WestDoor": t(10), "NorthDoor": t(11)}}
+    _complete_window_cutouts(entry)
+    return entry
 
 
 def _all_interior_walls() -> list[dict]:
