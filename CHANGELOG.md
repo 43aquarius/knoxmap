@@ -2,6 +2,13 @@
 
 ## 1.4.8
 
+- **Setup spots an MSYS or Cygwin Python** (`Setup.bat`). A .venv built by one
+  of those has a unix-style `bin` folder rather than `Scripts`, and installs
+  packages badly or not at all. Setup now notices the `bin` layout, says so,
+  and offers to throw that environment away and fetch a Windows Python
+  instead; answer no and it carries on with the one that is there. Thanks to
+  @alexandruborcan (#14).
+
 - **Fewer Overpass timeouts** (`generator/osm.py`). Two tiles of four failing
   with "no answer within 100s" on every endpoint was partly our own doing.
   Downloads ran one tile per endpoint, three at once - but overpass.osm.ch
