@@ -223,7 +223,7 @@ function updateBboxFields() {
   document.getElementById('east').value  = e.toFixed(6);
 
   const area = bboxAreaKm2(s, w, n, e);
-  const mpt = parseFloat(document.getElementById('metersPerTile').value);
+  const mpt = readScale();
   const widthM  = haversineKm(s, w, s, e) * 1000;
   const heightM = haversineKm(s, w, n, w) * 1000;
   const tilesX = Math.ceil(widthM / mpt / 300) * 300;
@@ -301,7 +301,25 @@ function clearBboxFields() {
   fx.resetFrom('area');
 }
 
-document.getElementById('metersPerTile').addEventListener('change', updateBboxFields);
+// The scale is typed, so it can be empty, half-typed or out of range. Whole
+// metres only, 1 to 100 (MIN/MAX_METERS_PER_TILE in app.py); anything else
+// becomes the nearest valid number, or 1, and the field is corrected so what
+// is shown is what is used.
+function readScale() {
+  const el = document.getElementById('metersPerTile');
+  let v = Math.round(parseFloat(String(el.value).replace(',', '.')));
+  if (!Number.isFinite(v) || v < 1) v = 1;
+  return Math.min(100, v);
+}
+
+function fixScaleField() {
+  const el = document.getElementById('metersPerTile');
+  el.value = String(readScale());
+  updateBboxFields();
+}
+
+document.getElementById('metersPerTile').addEventListener('input', updateBboxFields);
+document.getElementById('metersPerTile').addEventListener('change', fixScaleField);
 
 // Landscape and vegetation, 3 bytes a tile each, held at full size while the
 // map is drawn. It is the number that decides whether a big map finishes.
@@ -719,7 +737,7 @@ document.getElementById('generateBtn').addEventListener('click', async () => {
     west: bb.w,
     north: bb.n,
     east: bb.e,
-    metersPerTile: parseFloat(document.getElementById('metersPerTile').value),
+    metersPerTile: readScale(),
     mapName: chosen,
     settings: readSettings(),
     shape: selectionShape(),

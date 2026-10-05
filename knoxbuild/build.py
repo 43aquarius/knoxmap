@@ -1017,6 +1017,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     canopies: list[list] = []    # and the canopies over their forecourts
     decided: list[tuple] = []    # and what the map needs to know about it
     surroundings: list[tuple[float, float, float, int | None]] = []
+    centres: dict[int, tuple[float, float]] = {}   # each building's centroid
     for i, feat in enumerate(geo["features"]):
         pts = _ring_points(feat["geometry"])
         if len(pts) < 3:
@@ -1035,6 +1036,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         order.append((-poly.area, i, px))
         centre = poly.centroid
         if not centre.is_empty:
+            centres[i] = (centre.x, centre.y)
             surroundings.append((centre.x, centre.y, poly.area,
                                  levels_from_tags(tags, settings)))
     order.sort()
@@ -1062,9 +1064,11 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                 btag = (tags.get("building") or "").strip().lower()
                 if (-_neg_area * m2_per_tile > SHED_MAX_M2
                         and btag not in SHED_VALUES):
-                    centre = Polygon(px).centroid
-                    if not centre.is_empty:
-                        kind = areas.kind_for(centre.x, centre.y, int(-_neg_area))
+                    # Already worked out above; building the polygon again
+                    # for every candidate was Shapely done twice per building.
+                    centre = centres.get(i)
+                    if centre is not None:
+                        kind = areas.kind_for(centre[0], centre[1], int(-_neg_area))
             notable = is_notable(tags, kind)
             # Only housing can be thinned, so only housing has to be checked
             # for the shop or surgery mapped inside it; anything else is a

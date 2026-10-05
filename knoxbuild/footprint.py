@@ -33,9 +33,14 @@ def _polygon(px: list[tuple[float, float]]):
     return poly
 
 
-def grid_angle(poly) -> float:
-    """How far the building's long side is from the nearest grid axis, 0..45."""
-    rect = poly.minimum_rotated_rectangle
+def grid_angle(poly, rect=None) -> float:
+    """How far the building's long side is from the nearest grid axis, 0..45.
+
+    `rect` is the polygon's minimum rotated rectangle when the caller already
+    has it: working it out is the dearest thing Shapely does per building.
+    """
+    if rect is None:
+        rect = poly.minimum_rotated_rectangle
     if not hasattr(rect, "exterior"):
         return 0.0
     c = list(rect.exterior.coords)
@@ -46,9 +51,13 @@ def grid_angle(poly) -> float:
     return min(a, 90.0 - a)
 
 
-def _orthogonal_rotation(poly) -> float:
-    """Rotation that takes the dominant wall direction to the nearest grid axis."""
-    rect = poly.minimum_rotated_rectangle
+def _orthogonal_rotation(poly, rect=None) -> float:
+    """Rotation that takes the dominant wall direction to the nearest grid axis.
+
+    `rect` is the polygon's minimum rotated rectangle when the caller has it.
+    """
+    if rect is None:
+        rect = poly.minimum_rotated_rectangle
     coords = list(rect.exterior.coords) if hasattr(rect, "exterior") else []
     if len(coords) < 4:
         return 0.0
@@ -80,6 +89,10 @@ def rectilinearize_polygon(poly):
 
 def _largest_component(mask: np.ndarray) -> np.ndarray:
     """Keep only the biggest 4-connected piece of a mask."""
+    # A full mask is one piece. Squared-up buildings are always full, and
+    # walking every tile of a large one to learn that is the slow part.
+    if mask.all():
+        return mask
     h, w = mask.shape
     seen = np.zeros_like(mask, dtype=bool)
     best: list[tuple[int, int]] = []
@@ -236,24 +249,37 @@ def _clear_box(mask: np.ndarray, blocked: np.ndarray) -> tuple[int, int, int, in
     left to stand gives up altogether.
     """
     h, w = mask.shape
+    # Squeeze runs of identical rows and columns of `blocked` into one. A
+    # rectangle's edge can always slide to the end of such a run without
+    # touching a blocked tile or losing any of the building, so the best box
+    # is found on the squeezed grid and gives the same count of tiles. A large
+    # building with a lot or two clipping its corner is a handful of runs, not
+    # tens of thousands of tiles.
+    cuts_x = np.flatnonzero((blocked[:, 1:] != blocked[:, :-1]).any(axis=0)) + 1
+    cuts_y = np.flatnonzero((blocked[1:] != blocked[:-1]).any(axis=1)) + 1
+    cb = np.concatenate(([0], cuts_x, [w]))
+    rb = np.concatenate(([0], cuts_y, [h]))
+    small = blocked[rb[:-1]][:, cb[:-1]]
+    sh, sw = small.shape
     # How much of the building any box holds, in one subtraction.
     held = np.zeros((h + 1, w + 1), dtype=np.int32)
     held[1:, 1:] = mask.cumsum(0).cumsum(1)
     best = (0, 0, 0, 0, 0)
-    heights = np.zeros(w, dtype=np.int32)
-    for y in range(h):
-        # Free tiles standing one above another, counting up to this row.
-        heights = np.where(blocked[y], 0, heights + 1)
+    heights = np.zeros(sw, dtype=np.int32)
+    for y in range(sh):
+        # Free runs standing one above another, counting up to this row.
+        heights = np.where(small[y], 0, heights + 1)
         stack: list[tuple[int, int]] = []
         for x, tall in enumerate(heights.tolist() + [0]):
             start = x
             while stack and stack[-1][1] >= tall:
                 start, high = stack.pop()
                 top = y + 1 - high
-                tiles = int(held[y + 1, x] - held[top, x]
-                            - held[y + 1, start] + held[top, start])
+                tiles = int(held[rb[y + 1], cb[x]] - held[rb[top], cb[x]]
+                            - held[rb[y + 1], cb[start]] + held[rb[top], cb[start]])
                 if tiles > best[0]:
-                    best = (tiles, top, y + 1, start, x)
+                    best = (tiles, int(rb[top]), int(rb[y + 1]),
+                            int(cb[start]), int(cb[x]))
             stack.append((start, tall))
     return best[1:]
 
@@ -334,7 +360,7 @@ def place(px: list[tuple[float, float]], occupied: np.ndarray,
         return None, "small"
     if sides[1] > max_side:
         return None, "large"
-    angle = grid_angle(poly)
+    angle = grid_angle(poly, rect)
     rectangular = rect.area > 0 and poly.area / rect.area >= RECTANGULAR_ENOUGH
     point_origin = (poly.centroid.x, poly.centroid.y)
     point_rotation = 0.0
@@ -347,13 +373,13 @@ def place(px: list[tuple[float, float]], occupied: np.ndarray,
                              or (alignment == "smart" and not box_alignment
                                  and angle <= snap_degrees and not rectangular))
     if rectilinear_alignment:
-        point_rotation = _orthogonal_rotation(poly)
+        point_rotation = _orthogonal_rotation(poly, rect)
         poly = rectilinearize_polygon(poly)
 
     # Rectangle discards nonrectangular details; Smart only boxes near-grid
     # footprints that are already close to rectangular.
     if box_alignment:
-        point_rotation = _orthogonal_rotation(poly)
+        point_rotation = _orthogonal_rotation(poly, rect)
         # Square it up: an upright rectangle of the true side lengths, centred.
         cx, cy = poly.centroid.x, poly.centroid.y
         horizontal = (angle == 0.0 and (poly.bounds[2] - poly.bounds[0])

@@ -2224,10 +2224,10 @@ def check_no_size_wall(check, work: str) -> None:
     knoxapp.OUTPUT_DIR = Path(work) / "huge-maps"
     knoxapp.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        # Far past every old limit: about 1,100 km2 at half a metre a tile,
-        # which is 2.4 million tiles a side and a terabyte of bitmap.
+        # Far past every old limit: about 1,100 km2 at a metre a tile, which
+        # is over a million tiles a side and a quarter of a terabyte of bitmap.
         huge = {"south": 51.2, "west": -0.6, "north": 51.5, "east": -0.1,
-                "metersPerTile": 0.5, "mapName": "selftest-huge"}
+                "metersPerTile": 1, "mapName": "selftest-huge"}
         said = client.post("/api/generate", json=huge)
         body = (said.get_json() or {}).get("error", "")
         check("got as far as the download" in body,
