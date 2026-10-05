@@ -2,6 +2,15 @@
 
 ## 1.4.8.5
 
+- **Half a metre to the tile is back** (`app.py`, `templates/index.html`,
+  `static/js/app.js`). The scale became a whole-number field, which dropped
+  the one sub-metre setting the old list had - the one labelled "small areas",
+  where twice the detail is the entire point. A tile is a metre in the game,
+  so no other fraction buys anything; 0.5 does, and the same small town comes
+  out 108x108 tiles where a metre to the tile gives 54x55. Below one snaps to
+  a half, one and above to whole metres, and the page and the server settle it
+  the same way.
+
 - **A pier has railings along the water** (`generator/structures.py`,
   `generator/renderer.py`, suggested by Zombaxx). A jetty was painted onto the
   ground like a path and left there, with nothing along either side: it read

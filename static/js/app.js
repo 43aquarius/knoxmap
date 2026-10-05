@@ -307,9 +307,13 @@ function clearBboxFields() {
 // is shown is what is used.
 function readScale() {
   const el = document.getElementById('metersPerTile');
-  let v = Math.round(parseFloat(String(el.value).replace(',', '.')));
-  if (!Number.isFinite(v) || v < 1) v = 1;
-  return Math.min(100, v);
+  let v = parseFloat(String(el.value).replace(',', '.'));
+  if (!Number.isFinite(v)) return 1;
+  // Whole metres, except the half metre: a tile is a metre in the game, so
+  // the only fraction worth having is the one that doubles the detail on a
+  // small area. app.py settles it the same way.
+  if (v < 1) return 0.5;
+  return Math.min(100, Math.round(v));
 }
 
 function fixScaleField() {
