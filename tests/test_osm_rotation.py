@@ -1,0 +1,150 @@
+"""Overpass endpoint rotation, cooldown, tile cache and error text.
+
+Run from the KnoxMap folder:  python -m unittest discover tests
+No network: every request is replaced.
+"""
+import os
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import requests  # noqa: E402
+
+from generator import osm  # noqa: E402
+
+A, B, C = osm.ANSWERING_ENDPOINTS[:3]
+BLANK = [e for e in osm.OVERPASS_ENDPOINTS if e not in osm.ANSWERING_ENDPOINTS]
+BOX = (37.0, -83.0, 37.01, -82.99)
+
+
+def feat(i=1):
+    return osm.OSMFeature(i, "way", {"highway": "residential"},
+                          [(37.001, -82.999), (37.002, -82.998)])
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        osm._cooling.clear()
+        p = mock.patch.object(osm.time, "sleep", lambda s: None)
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(osm._cooling.clear)
+
+
+class Order(Base):
+    def test_ready_first_blank_last(self):
+        order = osm._endpoint_order(0)
+        self.assertEqual(order[:len(osm.ANSWERING_ENDPOINTS)],
+                         osm.ANSWERING_ENDPOINTS)
+        self.assertEqual(order[len(osm.ANSWERING_ENDPOINTS):], BLANK)
+
+    def test_resting_is_asked_last_not_dropped(self):
+        osm._note_down(A)
+        order = osm._endpoint_order(0)
+        self.assertIn(A, order)
+        self.assertLess(order.index(B), order.index(A))
+
+    def test_all_resting_still_asks_every_one(self):
+        for e in osm.ANSWERING_ENDPOINTS:
+            osm._note_down(e)
+        order = osm._endpoint_order(0)
+        for e in osm.ANSWERING_ENDPOINTS:
+            self.assertIn(e, order)
+
+    def test_rotation_spreads_tiles(self):
+        firsts = {osm._endpoint_order(i)[0] for i in range(len(osm.ANSWERING_ENDPOINTS))}
+        self.assertEqual(firsts, set(osm.ANSWERING_ENDPOINTS))
+
+
+class Fetch(Base):
+    def test_falls_through_dead_instance(self):
+        def ask(endpoint, query, timeout):
+            if endpoint == A:
+                raise requests.Timeout()
+            return [feat()]
+        with mock.patch.object(osm, "_ask", ask):
+            got = osm.fetch_features(*BOX, first=0)
+        self.assertEqual(len(got), 1)
+        self.assertTrue(osm._is_cooling(A))
+
+    def test_busy_instance_goes_on_cooldown(self):
+        def ask(endpoint, query, timeout):
+            if endpoint == A:
+                raise osm.OverpassError("HTTP 429", busy=True)
+            return [feat()]
+        with mock.patch.object(osm, "_ask", ask):
+            osm.fetch_features(*BOX, first=0)
+        self.assertTrue(osm._is_cooling(A))
+
+    def test_one_blank_is_not_believed(self):
+        def ask(endpoint, query, timeout):
+            if endpoint in BLANK:
+                return []
+            raise requests.Timeout()
+        with mock.patch.object(osm, "_ask", ask):
+            with self.assertRaises(osm.OverpassError):
+                osm.fetch_features(*BOX)
+
+    def test_two_blanks_are_believed(self):
+        def ask(endpoint, query, timeout):
+            return []
+        with mock.patch.object(osm, "_ask", ask):
+            self.assertEqual(osm.fetch_features(*BOX), [])
+
+    def test_error_names_every_instance_asked(self):
+        def ask(endpoint, query, timeout):
+            raise requests.Timeout()
+        with mock.patch.object(osm, "_ask", ask):
+            with self.assertRaises(osm.OverpassError) as cm:
+                osm.fetch_features(*BOX)
+        for e in osm.OVERPASS_ENDPOINTS:
+            self.assertIn(e.split("/")[2], str(cm.exception))
+
+
+class TileCache(Base):
+    def test_roundtrip_and_miss(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(osm, "TILE_CACHE_DIR", d):
+            self.assertIsNone(osm._tile_cache_get(BOX))
+            osm._tile_cache_put(BOX, [feat(7)])
+            got = osm._tile_cache_get(BOX)
+            self.assertEqual([f.osm_id for f in got], [7])
+            self.assertIsNone(osm._tile_cache_get((37.0, -83.0, 37.02, -82.99)))
+
+    def test_stale_tile_is_ignored(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(osm, "TILE_CACHE_DIR", d):
+            osm._tile_cache_put(BOX, [feat()])
+            old = osm.time.time() - osm.TILE_CACHE_MAX_AGE_S - 10
+            os.utime(osm._tile_cache_file(BOX), (old, old))
+            self.assertIsNone(osm._tile_cache_get(BOX))
+
+    def test_cached_tile_skips_network(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(osm, "TILE_CACHE_DIR", d), \
+                mock.patch.object(osm, "check_endpoints", lambda *a: None):
+            osm._tile_cache_put(BOX, [feat(3)])
+            with mock.patch.object(osm, "_ask", side_effect=AssertionError):
+                got = osm.fetch_features_tiled(*BOX, max_tile_km2=100)
+            self.assertEqual([f.osm_id for f in got], [3])
+
+
+class Explain(unittest.TestCase):
+    def test_busy_message_is_plain(self):
+        text = osm.explain(osm.OverpassError("every Overpass endpoint failed"))
+        self.assertIn("Wait a few minutes", text)
+        self.assertIn("Details:", text)
+
+    def test_too_big_message(self):
+        self.assertIn("smaller area",
+                      osm.explain(osm.OverpassError("x", too_big=True)))
+
+    def test_network_message(self):
+        self.assertIn("internet", osm.explain(requests.ConnectionError("x")))
+
+
+if __name__ == "__main__":
+    unittest.main()

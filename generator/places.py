@@ -19,6 +19,8 @@ import time
 
 import requests
 
+from generator import osm
+
 HEADERS = {
     "User-Agent": "KnoxMap/1.0 (+https://github.com/spytheeuclidean-a11y/knoxmap) local map generator",
     "Accept-Language": "en",
@@ -29,10 +31,9 @@ HEADERS = {
 # One request a second (see _throttle), a real User-Agent (HEADERS), results
 # cached (app.py), no autocomplete (the page searches only on Enter), no bulk use.
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-OVERPASS_ENDPOINTS = [
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-]
+# The same instances, in the same order, as the map download (generator/osm.py,
+# configurable in knoxmap_config.json).
+OVERPASS_ENDPOINTS = list(osm.ANSWERING_ENDPOINTS)
 
 _lock = threading.Lock()
 _last_call = 0.0
@@ -139,7 +140,8 @@ def landmarks(south: float, west: float, north: float, east: float,
     for endpoint in OVERPASS_ENDPOINTS:
         try:
             r = requests.post(endpoint, data={"data": query},
-                              headers=HEADERS, timeout=60)
+                              headers=HEADERS,
+                              timeout=(osm.CONNECT_TIMEOUT_S, 60))
             if r.status_code == 429 or r.status_code >= 500:
                 last_err = RuntimeError(f"{endpoint} -> {r.status_code}")
                 continue

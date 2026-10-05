@@ -7,6 +7,7 @@ with their full geometry so we can rasterize without a second roundtrip.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -19,17 +20,36 @@ from typing import Iterable, Sequence
 
 import requests
 
+import knoxpaths
 import knoxstop
 
-OVERPASS_ENDPOINTS = [
+# Both lists can be replaced from knoxmap_config.json, which updates leave
+# alone, so a dead public instance can be swapped without editing the source:
+#   "overpass_endpoints": ["https://.../api/interpreter", ...]
+#   "overpass_blank_only": ["overpass.osm.ch"]
+def _config_list(key: str) -> list:
+    try:
+        value = knoxpaths.load_config().get(key)
+    except Exception:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return []
+
+
+_DEFAULT_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    # kumi.systems stops answering for long stretches; this one was answering
+    # real data when it did.
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     # A third, because the other two go busy together: when one instance
     # is queueing the people it turned away are queueing on the next.
     # It is last because it is the one that answers an ordinary query with an
     # empty result - see EMPTY_NEEDS_SECOND below.
     "https://overpass.osm.ch/api/interpreter",
 ]
+OVERPASS_ENDPOINTS = _config_list("overpass_endpoints") or _DEFAULT_ENDPOINTS
 # overpass.openstreetmap.fr answers every query with 403 "This service is only
 # available to white-listed usages". It was tried once per tile, and on the
 # tiles whose turn it was it pushed the work onto whatever came next.
@@ -37,7 +57,8 @@ OVERPASS_ENDPOINTS = [
 # The instances that answer an ordinary query with real data. osm.ch is left
 # out: it is still asked, and its blank still counts towards BLANKS_TO_BELIEVE,
 # but it is not capacity and must not be counted as a download slot.
-BLANK_ONLY_HOSTS = ("overpass.osm.ch",)
+BLANK_ONLY_HOSTS = tuple(_config_list("overpass_blank_only")
+                         or ["overpass.osm.ch"])
 ANSWERING_ENDPOINTS = [e for e in OVERPASS_ENDPOINTS
                        if not any(h in e for h in BLANK_ONLY_HOSTS)]
 
@@ -69,6 +90,41 @@ def _is_cooling(endpoint: str) -> bool:
             del _cooling[endpoint]
             return False
         return bool(until)
+
+
+CONNECT_TIMEOUT_S = 10
+PROBE_TIMEOUT_S = 8
+
+
+def _probe(endpoint: str, lat: float, lon: float) -> bool:
+    """One tiny query: does this instance answer, and quickly?"""
+    query = (f'[out:json][timeout:{PROBE_TIMEOUT_S}];'
+             f'way["highway"]({lat},{lon},{lat + 0.002},{lon + 0.002});out count;')
+    try:
+        r = requests.post(endpoint, data={"data": query}, headers=HEADERS,
+                          timeout=(CONNECT_TIMEOUT_S, PROBE_TIMEOUT_S + 4))
+        return r.status_code == 200
+    except (requests.RequestException, ValueError):
+        return False
+
+
+def check_endpoints(south: float, west: float, north: float, east: float) -> None:
+    """Ask every instance a trivial question before the real download.
+
+    The ones that do not answer go on cooldown, so tiles ask them last instead
+    of each paying a full timeout to find out. The probes run together, so this
+    costs a few seconds, not a few seconds per instance.
+    """
+    lat, lon = (south + north) / 2, (west + east) / 2
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return
+
+    def one(endpoint):
+        ok = _probe(endpoint, lat, lon)
+        (_note_up if ok else _note_down)(endpoint)
+
+    with futures.ThreadPoolExecutor(max_workers=len(OVERPASS_ENDPOINTS)) as pool:
+        list(pool.map(one, OVERPASS_ENDPOINTS))
 
 
 def _endpoint_order(first: int) -> list:
@@ -297,8 +353,10 @@ def _error_text(body: str) -> str:
 
 
 def _ask(endpoint: str, query: str, timeout: int) -> list[OSMFeature]:
+    # A host that is down never completes the connection; waiting the whole
+    # query timeout to learn that cost 100 s per dead instance per tile.
     r = requests.post(endpoint, data={"data": query}, headers=HEADERS,
-                      timeout=timeout + 10)
+                      timeout=(CONNECT_TIMEOUT_S, timeout + 10))
     if r.status_code == 200:
         payload = r.json()
         # A query that runs out of time or memory part way through does not
@@ -383,6 +441,26 @@ def fetch_features(south: float, west: float, north: float, east: float,
                         timed_out=timed_out)
 
 
+def explain(exc: BaseException) -> str:
+    """What went wrong and what to do about it, for someone who is not reading
+    Overpass logs. The technical reason follows, for anyone who is."""
+    if isinstance(exc, OverpassError):
+        if exc.too_big:
+            head = ("That area has more map data than the public servers will "
+                    "send in one go. Pick a smaller area and try again.")
+        else:
+            head = ("The free OpenStreetMap servers are busy or not answering "
+                    "right now. KnoxMap already retried. Wait a few minutes "
+                    "and press Generate again; anything that did download is "
+                    "kept, so the next try is faster. A smaller area also helps.")
+    elif isinstance(exc, requests.RequestException):
+        head = ("KnoxMap could not reach the OpenStreetMap servers. Check your "
+                "internet connection, then try again.")
+    else:
+        return f"OSM query failed: {exc}"
+    return f"{head}\n\nDetails: {exc}"
+
+
 def _area_km2(south: float, west: float, north: float, east: float) -> float:
     lat_mid = math.radians((south + north) / 2)
     return abs((north - south) * 111.32 *
@@ -401,6 +479,72 @@ def _say(progress, done: int, total: int, note: str) -> None:
         progress(done, total, note)
     except TypeError:
         progress(done, total)
+
+
+# Tiles that downloaded are kept on disk, so a download that fails part way, or
+# is cancelled, does not fetch them again next time. They go stale: the map
+# moves, and the filters change (FILTERS_VERSION is checked by load_cache).
+TILE_CACHE_DIR = os.path.join(str(knoxpaths.BASE_DIR), "cache", "overpass_tiles")
+TILE_CACHE_MAX_AGE_S = 14 * 86400
+
+
+def _tile_cache_file(box: tuple) -> str:
+    key = ",".join(f"{v:.7f}" for v in box)
+    name = hashlib.sha1(key.encode("ascii")).hexdigest()[:20]
+    return os.path.join(TILE_CACHE_DIR, f"{name}.json.gz")
+
+
+def _tile_cache_get(box: tuple) -> list | None:
+    path = _tile_cache_file(box)
+    try:
+        if time.time() - os.path.getmtime(path) > TILE_CACHE_MAX_AGE_S:
+            return None
+    except OSError:
+        return None
+    return load_cache(path, box)
+
+
+def _tile_cache_put(box: tuple, feats: list) -> None:
+    try:
+        save_cache(_tile_cache_file(box), box, feats)
+    except OSError:
+        pass  # a tile that cannot be kept is still a tile
+
+
+def _local_features(south: float, west: float, north: float, east: float) -> list:
+    """Features from the player's own Overpass-JSON file, if one is set.
+
+    "osm_json_file" in knoxmap_config.json names a file saved from
+    overpass-turbo (Export -> raw OSM data, with geometry) or any Overpass
+    `[out:json]` query using `out geom`. It is only read when the public
+    servers have failed, and only what lies inside the map is kept.
+    """
+    try:
+        path = knoxpaths.load_config().get("osm_json_file")
+    except Exception:
+        return []
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            feats = _parse(json.load(fh))
+    except (OSError, ValueError):
+        return []
+
+    def inside(f: OSMFeature) -> bool:
+        pts = f.geometry or [p for _role, ring in f.role_geoms for p in ring]
+        return any(south <= lat <= north and west <= lon <= east
+                   for lat, lon in (_flat(pts)))
+
+    return [f for f in feats if inside(f)]
+
+
+def _flat(points):
+    for p in points:
+        if p and isinstance(p[0], (int, float)):
+            yield p[0], p[1]
+        elif p:
+            yield from _flat(p)
 
 
 def fetch_features_tiled(south: float, west: float, north: float, east: float,
@@ -432,6 +576,8 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
     # always works" is what the failure tells people to do. A 6.8 km2 town
     # failed after one pass while a city got three.
 
+    check_endpoints(south, west, north, east)
+
     d_lat = (north - south) / steps
     d_lon = (east - west) / steps
     merged: dict[tuple[str, int], OSMFeature] = {}
@@ -461,8 +607,13 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
         # finish and are thrown away with the rest.
         knoxstop.check(should_stop, "the download")
         try:
-            return index, _fetch_splitting(s0, w0, n0, e0, timeout,
-                                           first=index), None
+            box = (s0, w0, n0, e0)
+            kept = _tile_cache_get(box)
+            if kept is not None:
+                return index, kept, None
+            got = _fetch_splitting(s0, w0, n0, e0, timeout, first=index)
+            _tile_cache_put(box, got)
+            return index, got, None
         except OverpassError as exc:
             return index, None, exc
         finally:
@@ -514,6 +665,12 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
             break
 
     if left:
+        # Last resort: an Overpass-JSON export the player supplied.
+        local = _local_features(south, west, north, east)
+        if local:
+            for feat in local:
+                merged.setdefault((feat.kind, feat.osm_id), feat)
+            return list(merged.values())
         worst = problems[left[0][0]]
         # A map that is one tile has already been asked for on every pass and
         # cannot be cut up any further, so telling its owner to pick a smaller
