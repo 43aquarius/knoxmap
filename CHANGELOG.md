@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.9
+
+- **A busy Overpass instance is found out once, not by every tile**
+  (`generator/osm.py`). An instance that stops answering or turns us away with
+  a 429 or a gateway error is rested for two minutes, and the tiles behind the
+  one that found out skip it instead of each spending the full hundred-second
+  timeout to learn the same thing. When every instance is resting - which is
+  what the reports showed, both busy at once - a tile still asks one of them,
+  the one closest to being due, because a rest is a guess and no tile may fail
+  without trying. Nine tiles against two dead instances spent eighteen full
+  timeouts; they now spend ten.
+
+  The wait between passes doubles rather than sitting at twenty seconds, and
+  there are three passes instead of two: 45 seconds, then 90. A public
+  instance turning people away is busy for minutes, so the old retry landed
+  back inside the same busy spell and failed the way the first try had. The
+  error told people to wait a few minutes and try again, which worked - this
+  is the program doing it for them.
+
 ## 1.4.8
 
 - **The compiler stops answering windows that have no title** (`tools/compile_map.py`).

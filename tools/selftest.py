@@ -2068,6 +2068,7 @@ def check_overpass_blank(check) -> None:
 
         # The instance whose turn it is answers with nothing; another has the
         # data. The tile is the data.
+        _osm._cooling.clear()
         second_host = _osm.ANSWERING_ENDPOINTS[1].split("/")[2]
         replies = {second_host: Reply(ONE)}
         asked.clear()
@@ -2082,9 +2083,11 @@ def check_overpass_blank(check) -> None:
         # before the tile had asked anything that could answer it.
         blank_host = _osm.OVERPASS_ENDPOINTS[-1].split("/")[2]
         firsts = set()
+        _osm._cooling.clear()
         for turn in range(len(_osm.OVERPASS_ENDPOINTS) * 2):
             replies = {}
             asked.clear()
+            _osm._cooling.clear()
             _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10, first=turn)
             firsts.add(asked[0])
         check(blank_host not in firsts,
@@ -2092,6 +2095,7 @@ def check_overpass_blank(check) -> None:
               f"(tiles started on {len(firsts)} of the others)")
 
         # ...but real open country is empty, and has to stay downloadable.
+        _osm._cooling.clear()
         replies = {}
         got = _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10)
         check(got == [],
@@ -2100,6 +2104,7 @@ def check_overpass_blank(check) -> None:
         # One instance saying nothing while the rest never answer is not
         # agreement. The tile goes back round the retry rather than into the
         # map as a field.
+        _osm._cooling.clear()
         replies = {h.split("/")[2]: Reply({}, status=504)
                    for h in _osm.OVERPASS_ENDPOINTS[1:]}
         try:
@@ -2110,6 +2115,39 @@ def check_overpass_blank(check) -> None:
         check(said == "raised",
               "one blank answer and no other answer at all is a failed tile, "
               f"not an empty one ({said})")
+
+        # An instance that stopped answering is left out until it has had a
+        # rest, so the tiles behind the first one do not each wait the whole
+        # timeout to learn the same thing.
+        _osm._cooling.clear()
+        down = _osm.ANSWERING_ENDPOINTS[0]
+        replies = {down.split("/")[2]: Reply({}, status=504)}
+        asked.clear()
+        _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10, first=0)
+        paid = list(asked)
+        asked.clear()
+        _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10, first=0)
+        check(down.split("/")[2] in paid
+              and down.split("/")[2] not in asked,
+              "an instance that answered 504 is skipped by the tiles behind "
+              f"it ({len(paid)} asked, then {len(asked)})")
+
+        # ...but when every instance is resting there is nothing else to do.
+        _osm._cooling.clear()
+        for e in _osm.ANSWERING_ENDPOINTS:
+            _osm._note_down(e)
+        order = _osm._endpoint_order(0)
+        answering_asked = [e for e in order if e in _osm.ANSWERING_ENDPOINTS]
+        check(len(answering_asked) == 1,
+              "with every instance resting the tile still asks one rather "
+              f"than failing without trying, but only one ({len(answering_asked)})")
+        _osm._cooling.clear()
+
+        # The wait between passes outlasts a busy spell instead of landing
+        # back inside it.
+        pauses = [_osm._retry_pause(a) for a in range(1, _osm.TILE_ATTEMPTS)]
+        check(pauses == sorted(pauses) and pauses[-1] >= 90 and len(pauses) >= 2,
+              f"the retry backs off over minutes, not seconds ({pauses})")
 
         check("openstreetmap.fr" not in " ".join(_osm.OVERPASS_ENDPOINTS),
               "the endpoint that 403s every request is not asked")

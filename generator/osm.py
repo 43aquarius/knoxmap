@@ -41,6 +41,57 @@ BLANK_ONLY_HOSTS = ("overpass.osm.ch",)
 ANSWERING_ENDPOINTS = [e for e in OVERPASS_ENDPOINTS
                        if not any(h in e for h in BLANK_ONLY_HOSTS)]
 
+# How long an instance that turned us away or stopped answering is left out of
+# the rotation. Without this every tile found out the same thing for itself:
+# nine tiles against a busy server each waited the full timeout to learn what
+# the first one already knew, so a download spent ten minutes discovering one
+# fact. The tile that finds it pays once and the rest go straight to an
+# instance that is answering.
+ENDPOINT_COOLDOWN_S = 120.0
+_cooling: dict = {}
+_cooling_lock = threading.Lock()
+
+
+def _note_down(endpoint: str) -> None:
+    with _cooling_lock:
+        _cooling[endpoint] = time.time() + ENDPOINT_COOLDOWN_S
+
+
+def _note_up(endpoint: str) -> None:
+    with _cooling_lock:
+        _cooling.pop(endpoint, None)
+
+
+def _is_cooling(endpoint: str) -> bool:
+    with _cooling_lock:
+        until = _cooling.get(endpoint, 0.0)
+        if until and until <= time.time():
+            del _cooling[endpoint]
+            return False
+        return bool(until)
+
+
+def _endpoint_order(first: int) -> list:
+    """Which instances to ask, best first.
+
+    The ones answering come first, rotated so concurrent tiles spread out. An
+    instance on cooldown is left out entirely - unless they all are, when there
+    is nothing to do but ask anyway. The blank-only instance is always last.
+    """
+    spin = first % max(1, len(ANSWERING_ENDPOINTS))
+    spun = ANSWERING_ENDPOINTS[spin:] + ANSWERING_ENDPOINTS[:spin]
+    ready = [e for e in spun if not _is_cooling(e)]
+    if not ready and spun:
+        # Everything is resting, which is the case the players reported: both
+        # instances busy at once. Walking all of them anyway spent the whole
+        # timeout twice per tile to be told twice over what we already knew.
+        # One is still asked - a rest is a guess, not a fact, and a tile must
+        # never fail without trying - but only the one closest to being due.
+        with _cooling_lock:
+            ready = [min(spun, key=lambda e: _cooling.get(e, 0.0))]
+    return ready + [e for e in OVERPASS_ENDPOINTS if e not in ANSWERING_ENDPOINTS]
+
+
 # Whether an empty answer has to be confirmed by another instance before the
 # tile is taken as empty ground (fetch_features), and how many have to agree.
 # The flag is off only for tests, which would otherwise ask the real servers.
@@ -199,11 +250,15 @@ class OverpassError(RuntimeError):
     """A failed query, with whether a smaller bbox would plausibly succeed."""
 
     def __init__(self, message: str, too_big: bool = False,
-                 timed_out: bool = False):
+                 timed_out: bool = False, busy: bool = False):
         super().__init__(message)
         self.too_big = too_big
         # Nothing answered at all, as opposed to answering with a refusal.
         self.timed_out = timed_out
+        # The instance turned us away rather than disagreeing with the query:
+        # 429 out of slots, or a gateway that is not coping. Worth going
+        # somewhere else, and worth other tiles not finding out the hard way.
+        self.busy = busy
 
 
 # Overpass says "query timed out" and "out of memory" with HTTP 400, the same
@@ -265,7 +320,8 @@ def _ask(endpoint: str, query: str, timeout: int) -> list[OSMFeature]:
                and not any(s in whole for s in _MY_FAULT))
     raise OverpassError(f"HTTP {r.status_code}"
                         + (f" — {message}" if message else ""),
-                        too_big=too_big)
+                        too_big=too_big,
+                        busy=r.status_code == 429 or 500 <= r.status_code < 600)
 
 
 def fetch_features(south: float, west: float, north: float, east: float,
@@ -285,13 +341,7 @@ def fetch_features(south: float, west: float, north: float, east: float,
     too_big = False
     timed_out = False
     blank = 0
-    # Rotate over the instances that answer, and keep the blank-only ones for
-    # last. Rotating over all three put every third tile on osm.ch first, which
-    # replies 200 with nothing: a round trip and a second's wait spent before
-    # the tile had asked anything that could answer it.
-    spin = first % max(1, len(ANSWERING_ENDPOINTS))
-    order = (ANSWERING_ENDPOINTS[spin:] + ANSWERING_ENDPOINTS[:spin]
-             + [e for e in OVERPASS_ENDPOINTS if e not in ANSWERING_ENDPOINTS])
+    order = _endpoint_order(first)
     for endpoint in order:
         host = endpoint.split("/")[2]
         try:
@@ -299,12 +349,17 @@ def fetch_features(south: float, west: float, north: float, east: float,
         except OverpassError as exc:
             errors.append(f"{host}: {exc}")
             too_big = too_big or exc.too_big
+            if exc.busy:
+                _note_down(endpoint)
         except requests.Timeout:
             errors.append(f"{host}: no answer within {timeout + 10}s")
             timed_out = True
+            _note_down(endpoint)
         except (requests.RequestException, ValueError) as exc:
             errors.append(f"{host}: {exc}")
+            _note_down(endpoint)
         else:
+            _note_up(endpoint)
             if feats or not EMPTY_NEEDS_SECOND:
                 return feats
             # An instance that answers 200 with nothing in it looks exactly
@@ -414,7 +469,7 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
     problems: dict[int, OverpassError] = {}
     for attempt in range(TILE_ATTEMPTS):
         if attempt:
-            for _ in range(RETRY_PAUSE_S):
+            for _ in range(_retry_pause(attempt)):
                 knoxstop.check(should_stop, "the download")
                 time.sleep(1.0)
         done[0] = total - len(left)
@@ -455,9 +510,19 @@ MIN_SPLIT_KM2 = 0.5
 TIMEOUT_SPLIT_KM2 = 4.0
 TIMEOUT_SPLIT_DEPTH = 1
 # How many passes over the tiles a map gets, and how long to leave the servers
-# alone between them.
-TILE_ATTEMPTS = 2
-RETRY_PAUSE_S = 20
+# alone between them. The pause doubles: a public instance that is turning
+# people away is busy for minutes, and twenty seconds put the next pass back
+# inside the same busy spell, so the retry mostly failed the way the first try
+# had. The error people saw told them to wait a few minutes and try again,
+# which worked - this is the program doing that itself.
+TILE_ATTEMPTS = 3
+RETRY_PAUSE_S = 45
+RETRY_PAUSE_MAX_S = 180
+
+
+def _retry_pause(attempt: int) -> int:
+    """Seconds to wait before pass `attempt` (1 is the first retry)."""
+    return min(RETRY_PAUSE_MAX_S, RETRY_PAUSE_S * 2 ** (attempt - 1))
 
 
 def _fetch_splitting(south: float, west: float, north: float, east: float,
