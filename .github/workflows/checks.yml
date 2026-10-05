@@ -38,6 +38,9 @@ jobs:
             node -e "new Function(require('fs').readFileSync('$f', 'utf8'))" && echo "ok $f"
           done
 
+      - name: Overpass rotation, cooldown and tile cache (offline)
+        run: python -m unittest discover tests
+
       - name: Whole pipeline on a made-up town (offline)
         run: python tools/selftest.py
 

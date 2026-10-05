@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.4.8.3
+
+- **The instances are asked whether they are up before the download starts**
+  (`generator/osm.py`, thanks to @thehorseofcourse45, #17). One trivial query
+  to each, all at once, with an eight-second budget: whatever does not answer
+  is on cooldown before the first tile is asked for. The cooldown already
+  existed, but it was only learned the expensive way - the first tile paid a
+  full hundred-second timeout to find out what a probe settles in eight.
+
+- **A dead host is given up on in ten seconds, not a hundred**
+  (`generator/osm.py`, `generator/places.py`). requests applies one timeout to
+  both connecting and answering, so a host that never completes the connection
+  cost the whole query timeout to discover. Connecting now has ten seconds of
+  its own.
+
+- **A fourth instance, and the list is configurable** (`generator/osm.py`).
+  maps.mail.ru answers when kumi.systems is in one of its long silences.
+  "overpass_endpoints" and "overpass_blank_only" in knoxmap_config.json
+  replace the built-in lists, so a dead public instance can be swapped without
+  waiting for a release. Place lookup uses the same list.
+
+- **Tiles are kept for a fortnight** (`generator/osm.py`). A tile that
+  downloaded is cached on its own, so a generate that failed half way does not
+  ask for the half that worked again.
+
+- **A failure says what to do about it** (`generator/osm.py`, `app.py`). The
+  window led with the Overpass wording; it now leads with whether to wait, try
+  a smaller area or check the connection, and keeps the technical reason
+  underneath.
+
+- **The self-test stopped reaching the network, and itself**
+  (`tools/selftest.py`, `.github/workflows/checks.yml`). The probe above made
+  the offline Overpass test ask the real public instances, which its own
+  docstring promises it does not; and the new tile cache wrote sixteen tiles
+  into the project's cache folder and served them back on the next run, so the
+  check for "every instance failed" was answered by tiles the test had written
+  itself. Both are redirected now. The new tests/ suite runs in CI.
+
 ## 1.4.8.2
 
 - **A small map gets the same retries as a big one** (`generator/osm.py`). A

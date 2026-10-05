@@ -1917,8 +1917,18 @@ def check_overpass_retry(check) -> None:
 
     was_split, was_ask, was_pause = (_osm._fetch_splitting, _osm._ask,
                                      _osm.RETRY_PAUSE_S)
+    was_check, was_tiles = _osm.check_endpoints, _osm.TILE_CACHE_DIR
+    tile_dir = tempfile.mkdtemp(prefix="knoxmap-tiles-")
     try:
         _osm.RETRY_PAUSE_S = 0
+        # Two things here reach outside the test. check_endpoints asks the
+        # real public instances whether they are up, which this must not do
+        # and which the docstring above promises it does not. The tile cache
+        # keeps what a tile "downloaded" under the project's own cache folder,
+        # so the second run of this test was served sixteen tiles it had
+        # written itself and never saw the failure it was checking for.
+        _osm.check_endpoints = lambda *a, **k: None
+        _osm.TILE_CACHE_DIR = tile_dir
         seen: dict = {}
         ids: dict = {}
 
@@ -1943,6 +1953,11 @@ def check_overpass_retry(check) -> None:
             raise _osm.OverpassError("every Overpass endpoint failed — busy",
                                      timed_out=True)
 
+        # A fresh cache: the tiles the check above "downloaded" are kept for
+        # a fortnight, and handing them back here would answer the very
+        # question this is asking - whether a download that fails everywhere
+        # says so.
+        _osm.TILE_CACHE_DIR = tempfile.mkdtemp(prefix="knoxmap-tiles-")
         _osm._fetch_splitting = never_works
         try:
             _osm.fetch_features_tiled(50.0, 5.0, 50.2, 5.3, max_tile_km2=30.0)
@@ -1975,6 +1990,10 @@ def check_overpass_retry(check) -> None:
     finally:
         _osm._fetch_splitting, _osm._ask = was_split, was_ask
         _osm.RETRY_PAUSE_S = was_pause
+        used = _osm.TILE_CACHE_DIR
+        _osm.check_endpoints, _osm.TILE_CACHE_DIR = was_check, was_tiles
+        for d in {tile_dir, used}:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def check_flat_selection(check) -> None:
