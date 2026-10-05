@@ -121,6 +121,7 @@ class Plan:
     # Outside wall edges this storey shares with the building next door:
     # no window, shop front or door goes in them.
     party: set = field(default_factory=set)
+    profile: object | None = None
 
 
 # kind -> (floor tile entry index, display name, furniture wishlist)
@@ -351,7 +352,7 @@ ROOM_STYLE = {
     # location_business_office_generic_01_7/15 appears zero times in 13,243
     # tiles of them - where ours had 0.24 per 10 m2.
     "classroom": (C.FLOOR_TILE_PALE, "Classroom",
-                  ["table", "chair", "chair", "desk", "table", "chair",
+                  ["whiteboard", "table", "chair", "chair", "desk", "table", "chair",
                    "bookshelf", "chair", "shelf"]),
     "library": (C.FLOOR_WOOD, "Library",
                 ["bookshelf", "bookshelf", "table", "chair"]),
@@ -945,6 +946,7 @@ def _neighbours(plan: Plan) -> dict[int, dict[int, int]]:
 
 
 def _assign_flat_kinds(plan: Plan, hotel: bool = False,
+                       reception: bool = False,
                        rng: random.Random | None = None) -> None:
     """Give every flat its own set of rooms, arranged around its front door.
 
@@ -987,6 +989,8 @@ def _assign_flat_kinds(plan: Plan, hotel: bool = False,
             # A guest room, its bathroom, and a wardrobe closet in a big one.
             kinds = (["motelroom", "closet"][:max(1, len(ordered) - 1)]
                      + ["motelroom"] * max(0, len(ordered) - 3) + ["bathroom"])[:len(ordered)]                 if len(ordered) > 1 else ["motelroom"]
+            if reception and u == min(units):
+                kinds[0] = "lobby"
         elif kinds is None:
             base = FLAT_PLANS_OPEN[5] if open_plan else FLAT_PLANS[5]
             extra = [FLAT_EXTRA[k % len(FLAT_EXTRA)]
@@ -2440,12 +2444,24 @@ ENTRY_KINDS = ["hall", "lobby", "livingroom", "restaurant", "church",
 
 def _exterior_door(plan: Plan, rng: random.Random,
                    avoid: tuple[int, int] | None = None,
-                   street: str | None = None) -> None:
+                   street: str | None = None,
+                   entrances: list[tuple[float, float, dict]] | None = None) -> None:
     """One way in, into the room a visitor would expect to arrive in.
 
     `avoid` is the foot of the staircase, so the front door does not open
     straight onto the bottom step.
     """
+    if entrances:
+        placed = []
+        ordered = sorted(entrances, key=_entrance_priority)
+        for x, y, tags in ordered:
+            edge = _entrance_wall(plan, x, y, tags)
+            if edge is None or edge in placed:
+                continue
+            plan.doors.append(edge)
+            placed.append(edge)
+        if placed:
+            return
     order = {k: i for i, k in enumerate(ENTRY_KINDS)}
     if plan.kind in ("shop", "restaurant"):
         # Customers come in through the shop, not the staff stairs.
@@ -2474,6 +2490,69 @@ def _exterior_door(plan: Plan, rng: random.Random,
         plan.doors.append(front)
         _more_ways_in(plan, front)
         return
+
+
+def _entrance_priority(entrance: tuple[float, float, dict]) -> tuple:
+    """Main and accessible entrances take precedence when choosing the front."""
+    tags = entrance[2]
+    value = str(tags.get("entrance") or "yes").lower()
+    if value == "main":
+        rank = 0 if tags.get("wheelchair") == "yes" else 1
+    elif tags.get("wheelchair") == "yes":
+        rank = 2
+    elif value in ("emergency", "service"):
+        rank = 3
+    elif value == "exit":
+        rank = 5
+    else:
+        rank = 4
+    return rank, entrance[1], entrance[0]
+
+
+def _entrance_wall(plan: Plan, x: float, y: float,
+                   tags: dict) -> tuple[int, int, str] | None:
+    """Nearest legal exterior wall edge to one mapped entrance node."""
+    if str(tags.get("access") or "").lower() == "no":
+        return None
+    level = tags.get("level")
+    if level not in (None, ""):
+        values = [part.strip().lower() for part in str(level).split(";")]
+        if "ground" not in values:
+            try:
+                if not any(float(value) == 0 for value in values):
+                    return None
+            except ValueError:
+                return None
+
+    entrance = str(tags.get("entrance") or "yes").lower()
+    preferred = {
+        "main": {"lobby", "hall"},
+        "emergency": {"clinic", "medical", "firegarage", "policehall", "lobby", "hall"},
+        "service": {"storage", "schoolstorage", "firestorage", "kitchen",
+                    "diningroom", "warehouse", "firegarage"},
+        "exit": {"lobby", "hall"},
+    }.get(entrance, set())
+    choices = []
+    for idx, room in enumerate(plan.rooms, start=1):
+        if room.is_shaft:
+            continue
+        room_rank = 0 if room.kind in preferred else 1
+        for _side, wall in _outside_runs(plan, idx):
+            for ex, ey, direction in wall:
+                if direction == "W":
+                    dx = ex - x
+                    dy = max(ey - y, 0.0, y - ey - 1)
+                else:
+                    dx = max(ex - x, 0.0, x - ex - 1)
+                    dy = ey - y
+                distance = dx * dx + dy * dy
+                choices.append((distance, room_rank, ex, ey, direction))
+    if not choices:
+        return None
+    distance, _room_rank, ex, ey, direction = min(choices)
+    if distance > 2.25:
+        return None
+    return ex, ey, direction
 
 
 # One door per this much exterior wall, in tiles.
@@ -3242,6 +3321,8 @@ CENTRE_GROUPS: dict[str, tuple[list[tuple[str, int, int, str]], int]] = {
     # the side: how every lived-in living room in Knox County is arranged.
     "livingroom": ([("rug_wide", 0, 1, "W"), ("sofa", 0, 0, "N"), ("armchair", 3, 2, "E"),
                     ("coffee_table", 0, 2, "N"), ("tv", 1, 4, "S")], 1),
+    "motelroom": ([("double_bed", 0, 0, "W"), ("sidetable", 0, 2, "W"),
+                   ("tv", 3, 0, "E"), ("armchair", 3, 2, "W")], 1),
     # An open-plan flat: the same seating, set out in the middle of the floor,
     # because the cooking end has the walls.
     "openplan": ([("rug_wide", 0, 1, "W"), ("sofa", 0, 0, "N"),
@@ -3265,8 +3346,11 @@ CENTRE_GROUPS: dict[str, tuple[list[tuple[str, int, int, str]], int]] = {
     "office": ([("dining_table", 0, 1, "W"), ("chair", 0, 0, "N")], 3),
     "library": ([("dining_table", 1, 1, "W"), ("chair", 0, 1, "W"),
                  ("chair", 3, 1, "E")], 3),
-    "classroom": ([("dining_table", 0, 1, "W"), ("chair", 0, 0, "N"),
-                   ("chair", 1, 0, "N")], 6),
+    "classroom": ([("dining_table", 0, 0, "W"), ("chair", 0, 1, "S"),
+                   ("chair", 1, 1, "S")], 6),
+    "church": ([("table", 2, 0, "W"), ("chair", 0, 2, "S"),
+                ("chair", 2, 2, "S"), ("chair", 4, 2, "S"),
+                ("chair", 1, 4, "S"), ("chair", 3, 4, "S")], 1),
     "cafe": ([("round_table", 1, 0, "W"), ("chair", 0, 0, "W"),
               ("chair", 2, 0, "E")], 3),
     "restaurant": ([("round_table", 1, 1, "W"), ("chair", 0, 1, "W"),
@@ -3284,6 +3368,9 @@ KITCHENS = {"kitchen", "openplan", "breakroom", "restaurantkitchen", "pizzakitch
             "dinerkitchen", "chinesekitchen", "sushikitchen", "mexicankitchen", "seafoodkitchen",
             "cafekitchen", "bakerykitchen", "icecreamkitchen"}
 FALLBACK_GROUPS: dict[str, list[list[tuple[str, int, int, str]]]] = {
+    "motelroom": [[("double_bed", 0, 0, "W"), ("tv", 3, 0, "E")]],
+    "church": [[("table", 1, 0, "W"), ("chair", 0, 2, "S"),
+                ("chair", 2, 2, "S")]],
     "livingroom": [[("sofa", 0, 0, "N"), ("coffee_table", 0, 2, "N"), ("tv", 0, 4, "S")],
                    [("sofa", 0, 0, "N"), ("coffee_table", 0, 2, "N")],
                    [("rug_small", 0, 0, "W"), ("coffee_table", 0, 0, "N")]],
@@ -3307,6 +3394,9 @@ def _furnish_middle(plan: Plan, idx: int, room: Room,
                     palette: dict[str, str] | None = None) -> int:
     """Put the room's centre group(s) in its open middle. Returns how many."""
     spec = CENTRE_GROUPS.get(room.kind)
+    if room.kind == "lobby" and (plan.kind in CIVIC_KINDS or plan.kind == "apartment"):
+        spec = ([("shop_counter", 1, 0, "N"), ("chair", 0, 2, "S"),
+                 ("chair", 1, 2, "S"), ("chair", 2, 2, "S")], 1)
     if spec is None or room.is_core or room.is_shaft:
         return 0
     palette = palette or {}
@@ -3317,7 +3407,11 @@ def _furnish_middle(plan: Plan, idx: int, room: Room,
     group, repeat = spec
     before = len(plan.furniture)
     placed = _place_group(plan, idx, room, own(group), repeat, occupied, keep_clear)
-    for smaller in FALLBACK_GROUPS.get(room.kind, ()):
+    fallbacks = FALLBACK_GROUPS.get(room.kind, ())
+    if room.kind == "lobby" and (plan.kind in CIVIC_KINDS or plan.kind == "apartment"):
+        fallbacks = [[("shop_counter", 0, 0, "N"), ("chair", 0, 2, "S")],
+                     [("shop_counter", 0, 0, "N")]]
+    for smaller in fallbacks:
         if placed:
             break
         placed = _place_group(plan, idx, room, own(smaller), 1, occupied, keep_clear)
@@ -3594,7 +3688,8 @@ def _furnish(plan: Plan, rng: random.Random,
             continue
         pal = palettes.get(r.unit)
         if pal is None:
-            pal = palettes[r.unit] = interiors.palette(random.Random(f"{home_seed}:{r.unit}"))
+            pal = palettes[r.unit] = interiors.palette(
+                random.Random(f"{home_seed}:{r.unit}"), profile=plan.profile)
         _, _, base = ROOM_STYLE[r.kind]
         occupied: set[tuple[int, int]] = set()
         office = r.kind == "office" and plan.kind not in HOUSE_LIKE_KINDS
@@ -3668,12 +3763,22 @@ def _furnish(plan: Plan, rng: random.Random,
         # per 10 m2, nearly all of them desks, and at the standard rate ours
         # could only reach 1.36 of 2.97.
         per = ROOM_DENSITY.get(r.kind, 4)
+        if plan.profile:
+            per = max(1, round(per * (1.18 - 0.36 * plan.profile.clutter)))
         target = max(len(base), min(40, r.area // per))
         if eatery or commercial_kitchen or r.kind == "theatre":
             target = len(base)       # fitted out; nothing more to scatter
         wishlist = []
-        art = (WALL_ART_CAP if plan.kind in ART_FREE_KINDS
-               else 0 if rng.random() < WALL_ART_CHANCE else WALL_ART_CAP)
+        art_chance = WALL_ART_CHANCE
+        art_cap = WALL_ART_CAP
+        if plan.profile:
+            art_chance = max(0.2, min(0.85,
+                                     art_chance + (plan.profile.wealth - 0.5) * 0.25
+                                     - plan.profile.wear * 0.12))
+            if plan.profile.wealth >= 0.78 and plan.profile.wear < 0.3:
+                art_cap = 2
+        art = (art_cap if plan.kind in ART_FREE_KINDS
+               else 0 if rng.random() < art_chance else art_cap)
         for i in range(target):
             role = base[i % len(base)]
             if i >= len(base) and _once(role):
@@ -3682,7 +3787,7 @@ def _furnish(plan: Plan, rng: random.Random,
             # scaling the list with floor area turned a big room into a
             # gallery. Everything else keeps its share.
             if role in ("painting", "mirror") or role.startswith(("erika_art", "erika_ad")):
-                if art >= WALL_ART_CAP:
+                if art >= art_cap:
                     continue
                 art += 1
             # Counters have a budget of their own (_counter_runs), and the
@@ -3694,12 +3799,29 @@ def _furnish(plan: Plan, rng: random.Random,
         # The middle first, with an aisle round it the wall pieces must leave
         # free; placed after them, it almost never found room.
         before = len(plan.furniture)
+        if r.kind == "classroom" and "whiteboard" in wishlist:
+            preferred = "N" if r.w >= r.h else "W"
+            board_slots = sorted(
+                (s for s in slots if s[2] == preferred),
+                key=lambda s: (on_facade(s),
+                               abs(s[0] - (r.x0 + r.x1) / 2)
+                               + abs(s[1] - (r.y0 + r.y1) / 2)))
+            for slot in board_slots:
+                if hang("whiteboard", *slot):
+                    wishlist.remove("whiteboard")
+                    break
         if not office and not eatery:
             _furnish_middle(plan, idx, r, occupied, keep_clear, pal)
-        # What the middle took is off the list: the living room's sofa, table
-        # and television are the group there.
+        # The center group already supplied its focal pieces; do not add them
+        # again from the room wishlist.
         for role, *_ in plan.furniture[before:]:
-            if role in wishlist and _once(role):
+            consumed = (_once(role)
+                        or (r.kind == "church" and role == "table")
+                        or (r.kind == "motelroom" and role == "sidetable")
+                        or (r.kind == "lobby"
+                            and (plan.kind in CIVIC_KINDS or plan.kind == "apartment")
+                            and role == "shop_counter"))
+            if role in wishlist and consumed:
                 wishlist.remove(role)
         # A bed goes head to a wall between its bedside tables.
         if r.kind in ("bedroom", "kidsbedroom"):
@@ -4020,6 +4142,7 @@ class Building:
     # their own lot (knoxbuild/structures.pack_loose), not written into this
     # .tbx, because a square of one carries two tiles.
     escalators: list[tuple[int, int]] = field(default_factory=list)
+    profile: object | None = None
 
     @property
     def rooms(self) -> list[Room]:
@@ -4391,7 +4514,9 @@ def build_building(width: int, height: int, levels: int = 1,
                    retail: bool = False,
                    uses: list[tuple[str, str]] | None = None,
                    hotel: bool = False,
-                   party: dict | None = None) -> Building:
+                   party: dict | None = None,
+                   entrances: list[tuple[float, float, dict]] | None = None,
+                   profile: object | None = None) -> Building:
     """Lay out a building of `levels` storeys.
 
     `retail` puts shops on the ground floor of a block of flats, as on any
@@ -4451,10 +4576,12 @@ def build_building(width: int, height: int, levels: int = 1,
                    core=core, level=lvl, levels=levels, stairs=stairs,
                    corridor=corridor, shaft=shaft, shaft_door=shaft_door,
                    street=street, uses=uses, hotel=hotel,
+                   entrances=entrances if lvl == 0 else None,
+                   profile=profile,
                    party={e for e, up in (party or {}).items() if lvl < up})
         for lvl in range(levels)
     ]
-    building = Building(width=width, height=height, storeys=storeys)
+    building = Building(width=width, height=height, storeys=storeys, profile=profile)
     if stairs is not None:
         for lvl in range(levels - 1):
             building.stairs.append(stairs)
@@ -4663,7 +4790,9 @@ def build_plan(width: int, height: int, commercial: bool = False,
                street: str | None = None,
                uses: list[tuple[str, str]] | None = None,
                hotel: bool = False,
-               party: set | None = None) -> Plan:
+               party: set | None = None,
+               entrances: list[tuple[float, float, dict]] | None = None,
+               profile: object | None = None) -> Plan:
     """Lay out and furnish one storey of the given tile size.
 
     `uses` are what OpenStreetMap says a commercial ground floor holds
@@ -4675,7 +4804,8 @@ def build_plan(width: int, height: int, commercial: bool = False,
     settings = settings or Settings()
     rng = random.Random(seed)
     plan = Plan(width=width, height=height, mask=mask, core=core,
-                corridor=corridor, kind=kind, party=set(party or ()))
+                corridor=corridor, kind=kind, party=set(party or ()),
+                profile=profile)
     shop_floor = kind in ("shop", "retail", "restaurant") and ground
     mix_kind = "offices" if kind in ("shop", "restaurant") and not ground else kind
     # Rooms in a flat are smaller than rooms in a house, and there have to be
@@ -4718,7 +4848,7 @@ def build_plan(width: int, height: int, commercial: bool = False,
         # ended up, not the size it was cut.
         _stagger_flats(plan, rng)
         _unit_touches_corridor(plan)
-        _assign_flat_kinds(plan, hotel=hotel, rng=rng)
+        _assign_flat_kinds(plan, hotel=hotel, reception=hotel and ground, rng=rng)
     elif shop_floor:
         if kind == "restaurant" and not uses:
             uses = [("restaurantdining", "restaurantkitchen")]
@@ -4754,7 +4884,8 @@ def build_plan(width: int, height: int, commercial: bool = False,
 
     _doors(plan, rng)
     if ground:
-        _exterior_door(plan, rng, avoid=_stair_foot(stairs), street=street)
+        _exterior_door(plan, rng, avoid=_stair_foot(stairs), street=street,
+                       entrances=entrances)
         if kind in (None, "house"):
             _back_door(plan, street)
         if kind == "retail":

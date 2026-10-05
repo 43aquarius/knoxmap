@@ -404,19 +404,29 @@ CHOICES = {
 }
 
 
-def palette(rng: random.Random) -> dict[str, str]:
+def palette(rng: random.Random, profile=None) -> dict[str, str]:
     """Role -> the role this home uses for it."""
-    sofa, armchair = rng.choice([s for s in SOFA_SETS if s[0] in C.FURNITURE and s[1] in C.FURNITURE])
+    def choose(options, weight):
+        return rng.choices(options, weights=[weight(option) for option in options], k=1)[0]
+
+    sofa_sets = [s for s in SOFA_SETS if s[0] in C.FURNITURE and s[1] in C.FURNITURE]
+    if profile:
+        sofa, armchair = choose(sofa_sets, lambda pair: (
+            profile.furniture_weight(pair[0]) + profile.furniture_weight(pair[1])) / 2)
+    else:
+        sofa, armchair = rng.choice(sofa_sets)
     out = {"sofa": sofa, "armchair": armchair}
     for role, options in CHOICES.items():
         options = [o for o in options if o in C.FURNITURE]
-        pick = rng.choice(options)
+        pick = choose(options, profile.furniture_weight) if profile else rng.choice(options)
         out[role] = pick
     # Both beds of a pair and both wardrobes follow the one choice.
     out["double_bed_alt"] = out["double_bed"]
     out["bed_alt"] = out["bed"]
     out["wardrobe2"] = out["wardrobe"]
-    out["dresser_alt"] = rng.choice([o for o in CHOICES["dresser"] if o in C.FURNITURE])
+    dressers = [o for o in CHOICES["dresser"] if o in C.FURNITURE]
+    out["dresser_alt"] = (choose(dressers, profile.furniture_weight)
+                           if profile else rng.choice(dressers))
     return out
 
 

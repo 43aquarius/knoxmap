@@ -15,6 +15,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
+import random
 import re
 import os
 import sys
@@ -33,6 +35,7 @@ from .layout import build_building
 from .uses import USE_KEYS, is_hotel, uses_of
 from .context import Context, style_fits
 from .population import build_spawn_map, official_population, save_footprints
+from .profile import BuildingProfile
 from .settings import PRESETS, Settings
 from .tbx import render_tbx
 from .world import Placement, render_pzw
@@ -480,7 +483,8 @@ def wall_variants(kind: str) -> list[dict]:
 
 
 def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
-               settings: Settings, density: float = 0.0) -> dict:
+               settings: Settings, density: float = 0.0,
+               profile: BuildingProfile | None = None) -> dict:
     """Materials for one building: its own if special, else its block's.
 
     Only styles that suit how built-up the place is are in the running, so the
@@ -491,6 +495,10 @@ def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
     kind = BORROWED_STYLE.get(kind or "", kind)
     if kind and kind in C.SPECIAL_STYLES:
         variants = wall_variants(kind)
+        if profile:
+            picker = random.Random(profile.seed ^ 0xA37E)
+            weights = [profile.style_weight(variant["name"]) for variant in variants]
+            return picker.choices(variants, weights=weights, k=1)[0]
         # By the building's own position, so neighbours differ and a rebuild
         # picks the same again.
         return variants[(tile_x * 73856093 ^ tile_y * 19349663) % len(variants)]
@@ -508,6 +516,12 @@ def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
         idx = (own // 100) % len(styles)
     if len(styles) > 1 and rng.random() < settings.style_oddity:
         idx = (idx + 1 + rng.randrange(len(styles) - 1)) % len(styles)
+    if profile:
+        weights = [profile.style_weight(style["name"])
+                   * (1.4 if i == idx else 1.0)
+                   for i, style in enumerate(styles)]
+        picker = random.Random(profile.seed ^ 0xA37E)
+        return picker.choices(styles, weights=weights, k=1)[0]
     return styles[idx]
 
 
@@ -726,9 +740,7 @@ def _road_weight(out_dir: str, map_name: str, proj) -> np.ndarray | None:
 
 
 def _points_of_use(out_dir: str, info: dict, map_name: str, proj) -> dict:
-    """Shops, restaurants, offices and the like mapped as points, from the
-    map's OpenStreetMap download, as {(x // 16, y // 16): [(x, y, tags)]} in
-    tiles. Empty for a download made before they were asked for."""
+    """Point features from OSM, bucketed by tile for nearby-footprint lookup."""
     from generator import osm
     bbox = info.get("bbox") or {}
     cache = os.path.join(out_dir, info["osm_cache"]) if info.get("osm_cache")         else osm.cache_path(out_dir, map_name)
@@ -741,7 +753,8 @@ def _points_of_use(out_dir: str, info: dict, map_name: str, proj) -> dict:
         from generator.renderer import _is_polygon, classify
         straighten_roads(feats, proj, classify, _is_polygon)
     for feat in feats:
-        if feat.kind != "node" or not any(k in feat.tags for k in USE_KEYS):
+        if feat.kind != "node" or not (
+            any(k in feat.tags for k in USE_KEYS) or "entrance" in feat.tags):
             continue
         lat, lon = feat.geometry[0]
         x, y = proj.to_px(lat, lon)
@@ -765,10 +778,55 @@ def _points_inside(grid: dict, px: list, taken: set) -> list[dict]:
         for gy in range(int(miny) // 16, int(maxy) // 16 + 1):
             for x, y, tags in grid.get((gx, gy), ()):
                 key = (x, y)
-                if key not in taken and zone.contains(Point(x, y)):
+                if (any(k in tags for k in USE_KEYS) and key not in taken
+                        and zone.contains(Point(x, y))):
                     taken.add(key)
                     out.append((x, y, tags))
     return [tags for _x, _y, tags in out]
+
+
+def _entrances_inside(grid: dict, px: list) -> list[tuple[float, float, dict]]:
+    """Entrance nodes on or just outside a building outline, in map tiles."""
+    if not grid:
+        return []
+    from shapely.geometry import Point
+    poly = Polygon(px)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    zone = poly.buffer(1.5)
+    minx, miny, maxx, maxy = zone.bounds
+    out = []
+    for gx in range(int(minx) // 16, int(maxx) // 16 + 1):
+        for gy in range(int(miny) // 16, int(maxy) // 16 + 1):
+            for x, y, tags in grid.get((gx, gy), ()):
+                if "entrance" in tags and zone.contains(Point(x, y)):
+                    out.append((x, y, tags))
+    return out
+
+
+def _entrances_by_unit(entrances: list[tuple[float, float, dict]], units
+                       ) -> list[list[tuple[float, float, dict]]]:
+    """Assign each mapped entrance to its closest unit and make it local."""
+    assigned = [[] for _ in units]
+    for x, y, tags in entrances:
+        closest = None
+        for i, unit in enumerate(units):
+            lx, ly = x - unit.x0, y - unit.y0
+            ix0, iy0 = math.floor(lx), math.floor(ly)
+            distance = float("inf")
+            for iy in range(max(0, iy0 - 1), min(unit.height, iy0 + 2)):
+                for ix in range(max(0, ix0 - 1), min(unit.width, ix0 + 2)):
+                    if not unit.mask[iy, ix]:
+                        continue
+                    dx = max(ix - lx, 0.0, lx - ix - 1)
+                    dy = max(iy - ly, 0.0, ly - iy - 1)
+                    distance = min(distance, dx * dx + dy * dy)
+            if closest is None or distance < closest[0]:
+                closest = (distance, i, lx, ly)
+        if closest is not None and closest[0] <= 2.25:
+            _distance, i, lx, ly = closest
+            assigned[i].append((lx, ly, tags))
+    return assigned
 
 
 def _party_walls(owner: np.ndarray, me: int, x0: int, y0: int, mask: np.ndarray,
@@ -801,11 +859,12 @@ def _make_one(job: tuple) -> tuple:
     furniture, error): a building that cannot be laid out is left out with the
     reason, instead of stopping the other two thousand."""
     (w, h, levels, commercial, seed, kind, mask, settings, style, label, path, street, retail,
-     uses, hotel, party) = job
+        uses, hotel, entrances, profile, party) = job
     try:
         plan = build_building(w, h, levels=levels, commercial=commercial, seed=seed,
                               kind=kind, mask=mask, settings=settings, street=street,
-                              retail=retail, uses=uses, hotel=hotel, party=party)
+                              retail=retail, uses=uses, hotel=hotel, party=party,
+                              entrances=entrances, profile=profile)
         text = render_tbx(plan, label, style)
     except Exception:  # noqa: BLE001
         import traceback
@@ -1022,8 +1081,9 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
             knoxstop.check(should_stop, "the buildings")
         feat = geo["features"][i]
         fp, reason = place(px, occupied, min_side=min_size, max_side=max_size,
-                           snap_degrees=45 if straight else settings.square_buildings,
-                           avoid=road_weight, lots=lots)
+                   snap_degrees=settings.square_buildings,
+                   avoid=road_weight, lots=lots,
+                   alignment=settings.building_alignment)
         if fp is None:
             skipped[reason] += 1
             continue
@@ -1041,6 +1101,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # offices mapped as points inside it.
         inside = [tags] + _points_inside(points, px, points_taken)
         uses = uses_of(inside)
+        entrance_points = _entrances_inside(points, px)
         hotel = is_hotel(inside)
         if ("gasstore", "storage") in uses:
             stations.append((x0, y0, w, h, street_side(x0, y0, w, h)))
@@ -1101,11 +1162,17 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
             offices = ("office", "office") in uses or btag == "office" or re.search(
                 r"\b(tower|building|plaza|center|centre|exchange)\b", tags.get("name") or "", re.I)
             special = "civic" if offices else "apartment"
+        local_density = context.density(cx, cy)
+        profile = BuildingProfile.infer(tags, special, local_density, real_m2,
+                                        levels, seed + i * 31)
         # Hotels are dressed as the city's big buildings, army bases as works,
         # and the public buildings that have no walls of their own as civic.
         style = pick_style(STYLE_AS.get("civic" if hotel else special, special),
                            x0, y0, style_rng, settings,
-                           density=context.density(cx, cy))
+                           density=local_density, profile=profile)
+        if profile.wear < 0.18 and style.get("grime"):
+            style = dict(style)
+            style.pop("grime", None)
 
         name = tags.get("name") or ""
         real_name = name if is_notable(tags, special) else ""
@@ -1113,6 +1180,11 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # one building it is the "uber building" players reported. Each unit
         # becomes its own building, standing wall to wall with the next.
         units = row_units(fp, special, btag, len(uses), metres_per_tile)
+        placed_entrances = [(x, y, tags) for x, y, tags in entrance_points]
+        if fp.point_rotation or fp.point_offset != (0.0, 0.0):
+            placed_entrances = [(*fp.transform_point(x, y), tags)
+                                for x, y, tags in entrance_points]
+        entrances_by_unit = _entrances_by_unit(placed_entrances, units)
         if len(units) > 1:
             rows_split += 1
             units_made += len(units)
@@ -1136,7 +1208,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                          # Shops under flats where the town is built up.
                          context.density(cx, cy) >= RETAIL_DENSITY,
                          # What the ground floor really is, and a hotel's rooms.
-                         unit_uses, hotel))
+                         unit_uses, hotel, entrances_by_unit[n], profile))
             outline = px if len(units) == 1 else [
                 (ux0, uy0), (ux0 + uw, uy0), (ux0 + uw, uy0 + uh), (ux0, uy0 + uh)]
             decided.append((fname, label, ux0, uy0, uw, uh, unit, outline, special,

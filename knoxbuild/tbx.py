@@ -216,7 +216,7 @@ def render_tbx(plan: Plan | Building, name: str,
     their new indices.
     """
     building = plan if isinstance(plan, Building) else Building(
-        width=plan.width, height=plan.height, storeys=[plan])
+        width=plan.width, height=plan.height, storeys=[plan], profile=plan.profile)
     storeys = building.storeys
 
     entries = list(C.TILE_ENTRIES)
@@ -370,7 +370,13 @@ def render_tbx(plan: Plan | Building, name: str,
                    if o in C.EXTRA_FLOORS]
         if not options:
             continue
-        entries.append(C.floor_entry(pick_rng.choice(options)))
+        if building.profile:
+            choice = pick_rng.choices(
+                options, weights=[building.profile.floor_weight(option)
+                                  for option in options], k=1)[0]
+        else:
+            choice = pick_rng.choice(options)
+        entries.append(C.floor_entry(choice))
         room_floor[kind] = len(entries)
 
     # A mall's concourse runs the same floor on every storey in Knox County,

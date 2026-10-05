@@ -42,9 +42,8 @@ class Settings:
     # where the automatic answer is wrong, or where there are two grids and
     # the mapper wants to pick which one wins.
     rotate_degrees: float = 0.0
-    # Lay every road in straight runs along the tiles and on the 45-degree
-    # diagonal, like Knox County's (1), and stand every building upright on
-    # the grid, clear of the roads; or draw them as mapped (0).
+    # Lay every road in straight runs along the tiles and on 45-degree
+    # diagonals, like Knox County's (1), or draw them as mapped (0).
     straight_roads: int = 0
 
     # --- terrain ---------------------------------------------------------
@@ -89,9 +88,7 @@ class Settings:
     apartment_footprint: int = 150
     apartment_chance: float = 0.55
     max_levels: int = 6
-    # Buildings turned less than this many degrees from the tile grid are
-    # squared up into upright rectangles; the rest keep their real angle as
-    # stepped walls. 45 squares up every building.
+    # Legacy Smart-mode threshold, retained for existing settings files.
     square_buildings: int = 15
     # Target room area in tiles before splitting. Knox County's rooms are 16 m2
     # at the median; 56 made them twice that, big bare halls.
@@ -105,6 +102,8 @@ class Settings:
     # Scales how many ParkingStall zones are found. Vehicles only ever spawn
     # inside one, so this is the dial for how many cars are in the streets.
     parking_density: float = 1.0
+    # How each building outline is fitted to the tile grid.
+    building_alignment: str = "smart"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -121,6 +120,11 @@ class Settings:
         for name, raw in list(base.items()) + list(data.items()):
             if name not in types:
                 continue          # unknown key, including "preset" itself
+            if name == "building_alignment":
+                value = str(raw).strip().lower()
+                if value in BUILDING_ALIGNMENT_OPTIONS:
+                    kept[name] = value
+                continue
             try:
                 value = int(raw) if types[name] == "int" else float(raw)
             except (TypeError, ValueError, OverflowError):
@@ -129,6 +133,18 @@ class Settings:
                 continue          # NaN compares false with everything; keep the default
             lo, hi = LIMITS[name]
             kept[name] = min(max(value, lo), hi)
+        if "building_alignment" not in data:
+            old_square = data.get("square_buildings",
+                                  base.get("square_buildings", cls().square_buildings))
+            old_straight = data.get("straight_roads", base.get("straight_roads", 0))
+            try:
+                old_square = float(old_square)
+                old_straight = int(old_straight)
+            except (TypeError, ValueError, OverflowError):
+                old_square, old_straight = 15.0, 0
+            kept["building_alignment"] = (
+                "rectangle" if old_straight or old_square >= 45 else
+                "real" if old_square <= 0 else "smart")
         return cls(**kept)
 
 
@@ -159,11 +175,14 @@ LIMITS = {
     # and compile time - the presets stay low and this is the ceiling.
     "max_levels": (1, 30),
     "room_size": (16, 400),
+    "building_alignment": (0, 3),
     "square_buildings": (0, 45),
     "neighbourhood_tiles": (20, 2000),
     "style_oddity": (0.0, 1.0),
     "parking_density": (0.0, 4.0),
 }
+
+BUILDING_ALIGNMENT_OPTIONS = ("real", "smart", "rectilinear", "rectangle")
 
 
 PRESETS = {

@@ -255,6 +255,9 @@ OVERPASS_FILTERS: Sequence[str] = (
     'node["healthcare"]',
     'node["leisure"~"^(fitness_centre|sports_centre|dance|bowling_alley)$"]',
     'node["tourism"~"^(hotel|motel|hostel|guest_house|museum|gallery)$"]',
+    # Mapped building doors: carried into knoxbuild so the generated footprint
+    # can put its exterior doors where people actually enter.
+    'node["entrance"]',
     # Bases, armouries, barracks: mapped with military=* as often as with
     # landuse=military, and without these an armoury was somebody's house.
     'way["military"]',
@@ -268,7 +271,7 @@ OVERPASS_FILTERS: Sequence[str] = (
 
 # Bumped whenever the filters above change, so a cached download made with
 # the old list is fetched again instead of silently lacking the new features.
-FILTERS_VERSION = 11
+FILTERS_VERSION = 12
 
 
 @dataclass
