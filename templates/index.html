@@ -113,16 +113,18 @@
       <label class="field">Map name
         <input type="text" id="mapName" value="" placeholder="leave blank for an automatic name"/>
       </label>
-      <label class="field">Scale
-        <select id="metersPerTile">
-          <option value="0.5">0.5 m per tile (small areas)</option>
-          <option value="1.0" selected>1 m per tile (recommended)</option>
-          <option value="2.0">2 m per tile</option>
-          <option value="3.0">3 m per tile</option>
-          <option value="4.0">4 m per tile</option>
-          <option value="6.0">6 m per tile</option>
-          <option value="8.0">8 m per tile (whole regions)</option>
-        </select>
+      <label class="field">Scale (whole metres per tile)
+        <input type="number" id="metersPerTile" list="metersPerTileOptions"
+               value="1" min="1" max="100" step="1" inputmode="numeric"
+               title="Type a whole number, or pick a suggestion. 1 is recommended; 1 to 8 is the usual range."/>
+        <datalist id="metersPerTileOptions">
+          <option value="1" label="1 m per tile (recommended, most detail)"></option>
+          <option value="2" label="2 m per tile"></option>
+          <option value="3" label="3 m per tile"></option>
+          <option value="4" label="4 m per tile"></option>
+          <option value="6" label="6 m per tile"></option>
+          <option value="8" label="8 m per tile (whole regions)"></option>
+        </datalist>
       </label>
 
       <div class="field-label">Kind of place</div>

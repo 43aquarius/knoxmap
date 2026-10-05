@@ -286,9 +286,9 @@ BIG_TILES_PER_SIDE = 9000      # 30 cells at 300 tiles each
 # A scale still has to be a scale: zero or a negative divides the world by
 # nothing. The range the window offers is 0.5 to 8; outside it is allowed and
 # said to be unusual.
-MIN_METERS_PER_TILE = 0.01
+MIN_METERS_PER_TILE = 1.0
 MAX_METERS_PER_TILE = 100.0
-USUAL_METERS_PER_TILE = (0.5, 8.0)
+USUAL_METERS_PER_TILE = (1.0, 8.0)
 
 # Landmark lookup asks for far more tag keys than the terrain query, so it is
 # the first thing to get slow.
@@ -745,9 +745,12 @@ def generate():
     if problem:
         return jsonify({"error": problem}), 400
     if not (MIN_METERS_PER_TILE <= meters_per_tile <= MAX_METERS_PER_TILE):
-        return jsonify({"error": f"Metres per tile has to be between "
-                                 f"{MIN_METERS_PER_TILE:g} and "
+        return jsonify({"error": f"Metres per tile has to be a whole number "
+                                 f"between {MIN_METERS_PER_TILE:g} and "
                                  f"{MAX_METERS_PER_TILE:g}."}), 400
+    # Whole metres only: 1.5 would put every building, road and lot on a grid
+    # that is not a multiple of the survey's own.
+    meters_per_tile = float(round(meters_per_tile))
 
     # Nothing below refuses the map. These are what the window has already
     # warned about; they are logged here so a report from somebody whose map

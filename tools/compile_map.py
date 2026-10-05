@@ -22,8 +22,10 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
+from concurrent import futures
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -563,9 +565,55 @@ def _why(proc) -> str:
     return " | ".join((said or lines)[-3:])
 
 
+# Each WorldEd process peaks around a gigabyte on a 4x4 batch (see COMPILE_BATCH
+# in app.py), so how many may run together is bounded by memory as much as by
+# cores. "compile_workers" in knoxmap_config.json overrides this; 1 is the old
+# one-at-a-time behaviour.
+GB_PER_WORKER = 3.0
+MAX_WORKERS = 3   # what the byte-for-byte comparison was run at
+
+
+def default_workers() -> int:
+    try:
+        wanted = int(knoxpaths.load_config().get("compile_workers") or 0)
+    except (TypeError, ValueError):
+        wanted = 0
+    if wanted > 0:
+        return wanted
+    cores = os.cpu_count() or 2
+    free_gb = _free_memory_gb()
+    by_memory = int(free_gb // GB_PER_WORKER) if free_gb else 1
+    return max(1, min(MAX_WORKERS, cores // 4, by_memory))
+
+
+def _free_memory_gb() -> float:
+    """Memory available right now, in GB; 0 when it cannot be told."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class MEM(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong),
+                            ("total", ctypes.c_ulonglong), ("avail", ctypes.c_ulonglong),
+                            ("tpage", ctypes.c_ulonglong), ("apage", ctypes.c_ulonglong),
+                            ("tvirt", ctypes.c_ulonglong), ("avirt", ctypes.c_ulonglong),
+                            ("ext", ctypes.c_ulonglong)]
+            m = MEM()
+            m.length = ctypes.sizeof(MEM)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+            return m.avail / 2 ** 30
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / 2 ** 20
+    except Exception:  # noqa: BLE001 - unknown memory means "run one"
+        pass
+    return 0.0
+
+
 def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                 on_progress=None, should_stop=None,
-                only_cells: list | None = None) -> int:
+                only_cells: list | None = None, workers: int | None = None) -> int:
     """Run every batch. Returns the number of compiled cells.
 
     A batch that fails is tried again (BATCH_ATTEMPTS) and, if it still will
@@ -579,6 +627,8 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
     in exactly the same way, and forty-eight batches of it is hours of
     nothing. Those stop the run at once, with what to do about it.
     """
+    if workers is None:
+        workers = default_workers()
     project = Path(project_dir).resolve()
     pzw = project / f"{project.name}.pzw"
     if not pzw.exists():
@@ -623,15 +673,15 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                        for y in range(0, h, batch) for x in range(0, w, batch)]
         started = time.time()
         failures: list[dict] = []
-        # Batches are done one at a time, in this order, and the counter says
-        # so: this has always been a plain loop, but a compile that looked
-        # like it jumped from 25 to 18 is worth being able to rule out.
-        previous = 0
-        for i, (bx, by, x1, y1) in enumerate(batches, start=1):
-            if i != previous + 1:
-                raise RuntimeError(f"compile {project.name}: batch {i} followed {previous} "
-                                   f"- the batches are not being done in order")
-            previous = i
+        total = len(batches)
+        # The first batch converts the whole bitmap to .tmx maps and
+        # assign_converted_maps writes them back; every later batch reads the
+        # result. Two processes converting at once would write the same files,
+        # so it goes alone, and the rest may then run side by side.
+        guard = threading.Lock()
+        finished = [0]
+
+        def do_batch(i, bx, by, x1, y1):
             cmd = knoxpaths.command_for(exe_path) + [
                 f"--generate-map={knoxpaths.tool_path(pzw)}",
                 f"--cells={bx},{by},{x1},{y1}"]
@@ -646,7 +696,7 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                                                  proc.stdout, proc.stderr)
                 again = f" (attempt {attempt}/{BATCH_ATTEMPTS})" if attempt > 1 else ""
                 knoxlog.log.info("compile %s [%s]: batch %d/%d cells %d,%d..%d,%d exit %d "
-                                 "(%s) in %.0fs%s", project.name, run, i, len(batches),
+                                 "(%s) in %.0fs%s", project.name, run, i, total,
                                  bx, by, x1, y1, proc.returncode,
                                  knoxlog.explain_exit(proc.returncode),
                                  time.time() - attempt_started, again)
@@ -659,28 +709,50 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                     raise RuntimeError(f"Compile cannot run on this system: {trouble}.")
                 if attempt < BATCH_ATTEMPTS:
                     knoxlog.log.warning("compile %s [%s]: batch %d/%d failed, trying again",
-                                        project.name, run, i, len(batches))
-            assign_converted_maps(pzw)
-            cells = len(list(lots.glob("*.lotheader")))
-            # 65 used to be tolerated because the wait for WorldEd was a guess.
-            # It now waits for the lot manager's own completion, so 65 means a
-            # genuine stall or timeout and the batch's cells cannot be trusted.
-            if proc.returncode != 0:
-                where = f"logs/worlded/{saved.name}" if saved else ""
-                failures.append({"cells": [bx, by, x1, y1], "exit": proc.returncode,
-                                 "why": _why(proc), "log": where,
-                                 "attempts": BATCH_ATTEMPTS})
-                knoxlog.log.error("compile %s [%s]: giving up on batch %d/%d cells "
-                                  "%d,%d..%d,%d after %d attempts - carrying on with the "
-                                  "rest", project.name, run, i, len(batches),
-                                  bx, by, x1, y1, BATCH_ATTEMPTS)
-            if on_progress:
-                on_progress(i, len(batches), cells)
-            else:
-                elapsed = time.time() - started
-                state = "FAILED" if proc.returncode != 0 else f"-> {cells} compiled"
-                print(f"  batch {i}/{len(batches)} cells {bx},{by}..{x1},{y1} "
-                      f"{state}  ({elapsed:.0f}s)", flush=True)
+                                        project.name, run, i, total)
+            with guard:
+                assign_converted_maps(pzw)
+                cells = len(list(lots.glob("*.lotheader")))
+                # 65 used to be tolerated because the wait for WorldEd was a guess.
+                # It now waits for the lot manager's own completion, so 65 means a
+                # genuine stall or timeout and the batch's cells cannot be trusted.
+                if proc.returncode != 0:
+                    where = f"logs/worlded/{saved.name}" if saved else ""
+                    failures.append({"cells": [bx, by, x1, y1], "exit": proc.returncode,
+                                     "why": _why(proc), "log": where,
+                                     "attempts": BATCH_ATTEMPTS})
+                    knoxlog.log.error("compile %s [%s]: giving up on batch %d/%d cells "
+                                      "%d,%d..%d,%d after %d attempts - carrying on with the "
+                                      "rest", project.name, run, i, total,
+                                      bx, by, x1, y1, BATCH_ATTEMPTS)
+                finished[0] += 1
+                if on_progress:
+                    on_progress(finished[0], total, cells)
+                else:
+                    elapsed = time.time() - started
+                    state = "FAILED" if proc.returncode != 0 else f"-> {cells} compiled"
+                    print(f"  batch {i}/{total} cells {bx},{by}..{x1},{y1} "
+                          f"{state}  ({elapsed:.0f}s)", flush=True)
+
+        jobs = [(i, *box) for i, box in enumerate(batches, start=1)]
+        pool_size = max(1, min(int(workers), len(jobs) - 1))
+        if pool_size <= 1 or len(jobs) < 3:
+            for job in jobs:
+                do_batch(*job)
+        else:
+            do_batch(*jobs[0])
+            knoxlog.log.info("compile %s [%s]: %d batches at a time", project.name,
+                             run, pool_size)
+            with futures.ThreadPoolExecutor(max_workers=pool_size) as pool:
+                pending = [pool.submit(do_batch, *job) for job in jobs[1:]]
+                try:
+                    for fut in futures.as_completed(pending):
+                        fut.result()
+                except BaseException:
+                    # A stop or a fatal error: do not start what has not begun.
+                    for fut in pending:
+                        fut.cancel()
+                    raise
 
         # Asked for particular cells, the batches that were not in this run
         # keep whatever the last full compile said about them - retrying two
