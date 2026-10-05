@@ -2127,20 +2127,18 @@ def check_overpass_blank(check) -> None:
         paid = list(asked)
         asked.clear()
         _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10, first=0)
-        check(down.split("/")[2] in paid
-              and down.split("/")[2] not in asked,
-              "an instance that answered 504 is skipped by the tiles behind "
-              f"it ({len(paid)} asked, then {len(asked)})")
+        check(asked[0] != down.split("/")[2] and down.split("/")[2] in asked,
+              "an instance that answered 504 goes to the back of the queue "
+              f"for the tiles behind it, but is still asked ({asked})")
 
         # ...but when every instance is resting there is nothing else to do.
         _osm._cooling.clear()
         for e in _osm.ANSWERING_ENDPOINTS:
             _osm._note_down(e)
         order = _osm._endpoint_order(0)
-        answering_asked = [e for e in order if e in _osm.ANSWERING_ENDPOINTS]
-        check(len(answering_asked) == 1,
-              "with every instance resting the tile still asks one rather "
-              f"than failing without trying, but only one ({len(answering_asked)})")
+        check(all(e in order for e in _osm.ANSWERING_ENDPOINTS),
+              "with every instance resting the tile asks them all anyway: a "
+              "rest is a guess and may not be the reason a town fails")
         _osm._cooling.clear()
 
         # The wait between passes outlasts a busy spell instead of landing
@@ -2148,6 +2146,30 @@ def check_overpass_blank(check) -> None:
         pauses = [_osm._retry_pause(a) for a in range(1, _osm.TILE_ATTEMPTS)]
         check(pauses == sorted(pauses) and pauses[-1] >= 90 and len(pauses) >= 2,
               f"the retry backs off over minutes, not seconds ({pauses})")
+
+        # A map small enough to be a single tile still gets every pass: it is
+        # what the failure message tells people to try, so it must not be the
+        # path that tries least.
+        _osm._cooling.clear()
+        passes = [0]
+        real_split = _osm._fetch_splitting
+
+        def counting(*a, **k):
+            passes[0] += 1
+            raise _osm.OverpassError("nope", timed_out=True)
+
+        _osm._fetch_splitting = counting
+        pause, _osm.RETRY_PAUSE_S = _osm.RETRY_PAUSE_S, 0
+        try:
+            _osm.fetch_features_tiled(50.0, 5.0, 50.01, 5.01, max_tile_km2=30.0)
+        except Exception:
+            pass
+        finally:
+            _osm._fetch_splitting = real_split
+            _osm.RETRY_PAUSE_S = pause
+        check(passes[0] == _osm.TILE_ATTEMPTS,
+              f"a one-tile map is asked for on every pass, not just the first "
+              f"({passes[0]} of {_osm.TILE_ATTEMPTS})")
 
         check("openstreetmap.fr" not in " ".join(_osm.OVERPASS_ENDPOINTS),
               "the endpoint that 403s every request is not asked")

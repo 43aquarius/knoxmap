@@ -811,8 +811,9 @@ def generate():
     features = osm.load_cache(cache, fetch_box)
     if features is None:
         _set_progress(map_name, stage="osm", done=0, total=1)
-        def _progress(i, total):
-            _set_progress(map_name, stage="osm", done=i - 1, total=total)
+        def _progress(i, total, note=""):
+            _set_progress(map_name, stage="osm", done=i - 1, total=total,
+                          note=note)
 
         try:
             # Always through the tiled path, even for a small area: with one

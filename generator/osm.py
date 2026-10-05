@@ -80,16 +80,16 @@ def _endpoint_order(first: int) -> list:
     """
     spin = first % max(1, len(ANSWERING_ENDPOINTS))
     spun = ANSWERING_ENDPOINTS[spin:] + ANSWERING_ENDPOINTS[:spin]
+    # Resting moves an instance to the back of the queue; it does not take it
+    # out. Dropping it altogether cost a player a town: one instance was
+    # resting after a timeout, the other stopped answering too, and the tile
+    # gave up having never asked the first. A rest is a guess about a server
+    # we cannot see, so it may reorder the asking and must not end it. When
+    # anything is answering the resting one is never reached anyway.
     ready = [e for e in spun if not _is_cooling(e)]
-    if not ready and spun:
-        # Everything is resting, which is the case the players reported: both
-        # instances busy at once. Walking all of them anyway spent the whole
-        # timeout twice per tile to be told twice over what we already knew.
-        # One is still asked - a rest is a guess, not a fact, and a tile must
-        # never fail without trying - but only the one closest to being due.
-        with _cooling_lock:
-            ready = [min(spun, key=lambda e: _cooling.get(e, 0.0))]
-    return ready + [e for e in OVERPASS_ENDPOINTS if e not in ANSWERING_ENDPOINTS]
+    resting = [e for e in spun if _is_cooling(e)]
+    return (ready + resting
+            + [e for e in OVERPASS_ENDPOINTS if e not in ANSWERING_ENDPOINTS])
 
 
 # Whether an empty answer has to be confirmed by another instance before the
@@ -389,6 +389,20 @@ def _area_km2(south: float, west: float, north: float, east: float) -> float:
                (east - west) * 111.32 * math.cos(lat_mid))
 
 
+def _say(progress, done: int, total: int, note: str) -> None:
+    """Tell the window what is happening, if it asked and if it can hear it.
+
+    The callback took two arguments before there was anything to say, and a
+    caller may still pass one of those.
+    """
+    if progress is None:
+        return
+    try:
+        progress(done, total, note)
+    except TypeError:
+        progress(done, total)
+
+
 def fetch_features_tiled(south: float, west: float, north: float, east: float,
                          max_tile_km2: float = 30.0, timeout: int = 90,
                          progress=None, should_stop=None) -> list[OSMFeature]:
@@ -412,8 +426,11 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
     """
     area = _area_km2(south, west, north, east)
     steps = max(1, math.ceil(math.sqrt(area / max_tile_km2)))
-    if steps == 1:
-        return _fetch_splitting(south, west, north, east, timeout)
+    # A map small enough to be one tile goes the same way as any other. It
+    # used to return straight from here, which meant it never reached the
+    # retry below: the smaller the area the less it tried, and "a smaller area
+    # always works" is what the failure tells people to do. A 6.8 km2 town
+    # failed after one pass while a city got three.
 
     d_lat = (north - south) / steps
     d_lon = (east - west) / steps
@@ -469,9 +486,18 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
     problems: dict[int, OverpassError] = {}
     for attempt in range(TILE_ATTEMPTS):
         if attempt:
-            for _ in range(_retry_pause(attempt)):
+            # Say what the wait is for. Three passes with a minute or two
+            # between them is a long time to sit on "Querying OpenStreetMap"
+            # with nothing moving, and a player who thinks it has hung kills
+            # it just before the pass that would have worked.
+            wait = _retry_pause(attempt)
+            for left_s in range(wait, 0, -1):
                 knoxstop.check(should_stop, "the download")
+                _say(progress, total - len(left), total,
+                     f"the Overpass servers are busy — waiting {left_s}s, "
+                     f"then trying again ({attempt + 1} of {TILE_ATTEMPTS})")
                 time.sleep(1.0)
+            _say(progress, total - len(left), total, "")
         done[0] = total - len(left)
         problems = {}
         again = []
@@ -489,11 +515,17 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
 
     if left:
         worst = problems[left[0][0]]
+        # A map that is one tile has already been asked for on every pass and
+        # cannot be cut up any further, so telling its owner to pick a smaller
+        # area is advice they have already taken.
+        how_many = ("The map would not download"
+                    if total == 1 else
+                    f"{len(left)} of {total} map tiles would not download")
+        smaller = "" if total == 1 else ", and a smaller area always does"
         raise OverpassError(
-            f"{len(left)} of {total} map tiles would not download. The public "
-            f"Overpass servers are shared and go busy; waiting a few minutes "
-            f"and generating again usually works, and a smaller area always "
-            f"does. {worst}",
+            f"{how_many}. The public Overpass servers are shared and go busy; "
+            f"waiting a few minutes and generating again usually works"
+            f"{smaller}. {worst}",
             too_big=any(e.too_big for e in problems.values()),
             timed_out=all(e.timed_out for e in problems.values()))
 

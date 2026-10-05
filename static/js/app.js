@@ -832,9 +832,13 @@ function startProgress(mapName) {
       const status = document.getElementById('status');
       if (p.stage === 'osm') {
         const total = p.total || 1;
-        status.textContent = total > 1
-          ? `Querying OpenStreetMap — area ${(p.done || 0) + 1} of ${total}…`
-          : 'Querying OpenStreetMap…';
+        // A retry waits a minute or two with nothing moving; say so, or it
+        // reads as a hang and gets killed just before the pass that works.
+        status.textContent = p.note
+          ? p.note
+          : (total > 1
+            ? `Querying OpenStreetMap — area ${(p.done || 0) + 1} of ${total}…`
+            : 'Querying OpenStreetMap…');
       } else if (p.stage === 'overture') {
         // A few minutes, nearly all of it Overture's own files being sifted
         // for the handful that cover this box. Saying so beats a dead bar.

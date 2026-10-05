@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.4.8.2
+
+- **A small map gets the same retries as a big one** (`generator/osm.py`). A
+  map small enough to fit in one tile returned before the retry loop, so it
+  was asked for once and given up on - while a city got three passes with a
+  rest between them. A 6.8 km2 town failed in four minutes having tried a
+  single time, and "a smaller area always works" is exactly what the failure
+  tells people to do, which sent them to the path that tried least. One tile
+  now goes the same way as sixteen.
+
+- **The wait says what it is for** (`generator/osm.py`, `app.py`,
+  `static/js/app.js`). Three passes with a minute or two between them is a
+  long time to sit on "Querying OpenStreetMap" with nothing moving, and
+  somebody who thinks it has hung kills it just before the pass that would
+  have worked. The window counts the wait down instead. Cancel still answers
+  within the second throughout.
+
+- **A one-tile map is not told to pick a smaller area** (`generator/osm.py`).
+  It has already been asked for on every pass and cannot be cut up further,
+  so that was advice it had taken; it now reads "The map would not download".
+
+- **A resting instance is asked last, not dropped** (`generator/osm.py`). The
+  cooldown added in 1.4.8.1 took a busy instance out of the rotation
+  altogether. That cost a town: overpass-api.de was resting after a timeout,
+  kumi.systems then stopped answering too, and the tile gave up having never
+  asked the first one at all - the error named two instances where there are
+  three. A rest is a guess about a server we cannot see, so it may reorder
+  the asking and must not end it. Nothing is slower for it: when any instance
+  is answering, the resting one is never reached.
+
 ## 1.4.8.1
 
 - **A busy Overpass instance is found out once, not by every tile**
