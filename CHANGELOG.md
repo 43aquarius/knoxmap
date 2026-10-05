@@ -22,7 +22,10 @@
   second instance agrees, so it can never finish a tile on its own. Three tiles
   were going at two instances that answer, and we queued behind ourselves on
   servers that were already busy. It is still asked, and its blank still
-  counts, but it is no longer a download slot.
+  counts, but it is no longer a download slot - and it is asked last rather
+  than taking its turn, because rotating over all three started every third
+  tile on it, spending a round trip and a second's wait before that tile had
+  asked anything that could answer.
 
   Trees mapped as their own node are no longer fetched: 9,300 of the 93,907
   features in a New York download, a tenth of the payload and a third of the

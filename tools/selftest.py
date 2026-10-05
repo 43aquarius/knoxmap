@@ -2068,14 +2068,28 @@ def check_overpass_blank(check) -> None:
 
         # The instance whose turn it is answers with nothing; another has the
         # data. The tile is the data.
-        last_host = _osm.OVERPASS_ENDPOINTS[-1].split("/")[2]
-        replies = {first_host: Reply(ONE)}
+        second_host = _osm.ANSWERING_ENDPOINTS[1].split("/")[2]
+        replies = {second_host: Reply(ONE)}
         asked.clear()
-        got = _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10,
-                                  first=len(_osm.OVERPASS_ENDPOINTS) - 1)
-        check(len(got) == 1 and asked[0] == last_host,
-              f"a blank answer from {last_host} is not the tile; the next "
-              f"instance is asked and its {len(got)} feature kept")
+        got = _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10, first=0)
+        check(len(got) == 1 and asked[1] == second_host,
+              f"a blank answer is not the tile; the next instance is asked "
+              f"and its {len(got)} feature kept")
+
+        # The instance that answers an ordinary query with nothing is asked
+        # last, never first. Rotating over all three put every third tile on
+        # it to begin with, which spent a round trip and a second's wait
+        # before the tile had asked anything that could answer it.
+        blank_host = _osm.OVERPASS_ENDPOINTS[-1].split("/")[2]
+        firsts = set()
+        for turn in range(len(_osm.OVERPASS_ENDPOINTS) * 2):
+            replies = {}
+            asked.clear()
+            _osm.fetch_features(50.0, 5.0, 50.1, 5.1, timeout=10, first=turn)
+            firsts.add(asked[0])
+        check(blank_host not in firsts,
+              f"{blank_host} answers with nothing, so no tile starts on it "
+              f"(tiles started on {len(firsts)} of the others)")
 
         # ...but real open country is empty, and has to stay downloadable.
         replies = {}

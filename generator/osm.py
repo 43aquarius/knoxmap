@@ -285,7 +285,13 @@ def fetch_features(south: float, west: float, north: float, east: float,
     too_big = False
     timed_out = False
     blank = 0
-    order = OVERPASS_ENDPOINTS[first % len(OVERPASS_ENDPOINTS):]         + OVERPASS_ENDPOINTS[:first % len(OVERPASS_ENDPOINTS)]
+    # Rotate over the instances that answer, and keep the blank-only ones for
+    # last. Rotating over all three put every third tile on osm.ch first, which
+    # replies 200 with nothing: a round trip and a second's wait spent before
+    # the tile had asked anything that could answer it.
+    spin = first % max(1, len(ANSWERING_ENDPOINTS))
+    order = (ANSWERING_ENDPOINTS[spin:] + ANSWERING_ENDPOINTS[:spin]
+             + [e for e in OVERPASS_ENDPOINTS if e not in ANSWERING_ENDPOINTS])
     for endpoint in order:
         host = endpoint.split("/")[2]
         try:
