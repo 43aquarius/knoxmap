@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.8.5
+## 1.5
 
 - **Half a metre to the tile is back** (`app.py`, `templates/index.html`,
   `static/js/app.js`). The scale became a whole-number field, which dropped
@@ -44,7 +44,6 @@
   generate, which was the other half of the suggestion: each storey is still
   laid out, it just comes out the same.
 
-## 1.4.8.4
 
 - **The logo again, and on the Steam page this time** (`branding/`,
   `static/logo.png`, `workshop/preview.png`, `tools/make_workshop_art.py`).
