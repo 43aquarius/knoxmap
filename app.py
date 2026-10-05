@@ -825,8 +825,9 @@ def generate():
         except knoxstop.Stopped:
             return _stopped(map_name, "generate")
         except Exception as exc:  # Overpass can be flaky — surface that clearly
-            _set_progress(map_name, stage="error", message=str(exc))
-            return failed(f"OSM query failed: {exc}", 502, exc)
+            message = osm.explain(exc)
+            _set_progress(map_name, stage="error", message=message)
+            return failed(message, 502, exc)
         try:
             osm.save_cache(cache, fetch_box, features)
         except OSError:
