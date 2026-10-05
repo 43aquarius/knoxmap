@@ -34,6 +34,13 @@ OVERPASS_ENDPOINTS = [
 # available to white-listed usages". It was tried once per tile, and on the
 # tiles whose turn it was it pushed the work onto whatever came next.
 
+# The instances that answer an ordinary query with real data. osm.ch is left
+# out: it is still asked, and its blank still counts towards BLANKS_TO_BELIEVE,
+# but it is not capacity and must not be counted as a download slot.
+BLANK_ONLY_HOSTS = ("overpass.osm.ch",)
+ANSWERING_ENDPOINTS = [e for e in OVERPASS_ENDPOINTS
+                       if not any(h in e for h in BLANK_ONLY_HOSTS)]
+
 # Whether an empty answer has to be confirmed by another instance before the
 # tile is taken as empty ground (fetch_features), and how many have to agree.
 # The flag is off only for tests, which would otherwise ask the real servers.
@@ -70,7 +77,13 @@ OVERPASS_FILTERS: Sequence[str] = (
     'relation["natural"="wood"]',
     'way["natural"="scrub"]',
     'way["natural"="heath"]',
-    'node["natural"="tree"]',
+    # Lone trees are not fetched. Every tree mapped as its own node was 9,300
+    # of the 93,907 features in a New York download - a tenth of the payload,
+    # and a third of all the nodes - for a 2 m dot each in the vegetation mask.
+    # Woods, forest, scrub and parks are polygons and still come down in full;
+    # what fills them is tree_density, so only a tree standing on its own in a
+    # street is lost. The public instances were timing out on these tiles.
+    # 'node["natural"="tree"]',
     # grass / parks / farms
     'way["landuse"="grass"]',
     'way["landuse"="meadow"]',
@@ -148,7 +161,7 @@ OVERPASS_FILTERS: Sequence[str] = (
 
 # Bumped whenever the filters above change, so a cached download made with
 # the old list is fetched again instead of silently lacking the new features.
-FILTERS_VERSION = 10
+FILTERS_VERSION = 11
 
 
 @dataclass
@@ -385,7 +398,12 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
     # missed one started again from nothing. The tiles that arrived are kept
     # and only the ones that did not are asked for again - a public instance
     # that was busy a moment ago usually is not a minute later.
-    workers = min(len(OVERPASS_ENDPOINTS), total)
+    # Only the instances that answer with data are capacity. osm.ch replies 200
+    # with nothing (EMPTY_NEEDS_SECOND), and a blank needs a second instance to
+    # agree before it is believed, so it can never finish a tile on its own -
+    # counting it ran three tiles at once against the two that answer, which
+    # queued us behind ourselves on servers that were already busy.
+    workers = min(max(1, len(ANSWERING_ENDPOINTS)), total)
     left = list(enumerate(tiles))
     problems: dict[int, OverpassError] = {}
     for attempt in range(TILE_ATTEMPTS):

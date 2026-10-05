@@ -2,6 +2,21 @@
 
 ## 1.4.8
 
+- **Fewer Overpass timeouts** (`generator/osm.py`). Two tiles of four failing
+  with "no answer within 100s" on every endpoint was partly our own doing.
+  Downloads ran one tile per endpoint, three at once - but overpass.osm.ch
+  answers an ordinary query with nothing, and a blank is only believed when a
+  second instance agrees, so it can never finish a tile on its own. Three tiles
+  were going at two instances that answer, and we queued behind ourselves on
+  servers that were already busy. It is still asked, and its blank still
+  counts, but it is no longer a download slot.
+
+  Trees mapped as their own node are no longer fetched: 9,300 of the 93,907
+  features in a New York download, a tenth of the payload and a third of the
+  nodes, for a 2 m dot each in the vegetation mask. Woods, forest, scrub and
+  parks are polygons and still come down whole - tree_density is what fills
+  them - so what is lost is a tree standing on its own in a street.
+
 - **A new logo** (`branding/`, `static/logo.png`, `templates/index.html`,
   `README.md`). The map pin is now a zombie's head standing on the same
   isometric tile, over a house. It is 128px pixel art in 42 colours, so the
