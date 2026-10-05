@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.9
+## 1.4.8.1
 
 - **A busy Overpass instance is found out once, not by every tile**
   (`generator/osm.py`). An instance that stops answering or turns us away with
