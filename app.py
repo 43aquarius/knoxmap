@@ -1356,8 +1356,12 @@ def api_settings():
         # JSON writes 1.0 as 1, so the page cannot tell a float whose default
         # happens to be whole from an int - and a woodland slider built as an
         # integer can only reach 0, 1, 2 or 3. Say which is which.
-        "types": {f.name: ("int" if f.type in (int, "int") else "float")
+        "types": {f.name: ("enum" if f.name == "building_alignment" else
+                           "int" if f.type in (int, "int") else "float")
                   for f in fields(Settings)},
+        "options": {"building_alignment": [
+            ["real", "Real"], ["smart", "Smart"],
+            ["rectilinear", "Rectilinear"], ["rectangle", "Rectangle"]]},
         "limits": {k: list(v) for k, v in LIMITS.items()},
         "presets": {name: s.to_dict() for name, s in PRESETS.items()},
     })

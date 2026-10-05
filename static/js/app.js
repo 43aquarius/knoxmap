@@ -345,13 +345,13 @@ const SETTING_LABELS = {
   min_size:            ['Smallest building', 'Buildings narrower than this many tiles are left out.'],
   align_streets:       ['Straighten streets', '1 turns the map so the main street grid runs along the tiles - no staircase roads. 0 keeps north up.'],
   rotate_degrees:      ['Turn the map', 'Degrees to turn the whole area before it is built, on top of Straighten streets. Use it when the automatic angle picks the wrong grid.'],
-  straight_roads:      ['Knox County roads', '1 lays every road in straight runs along the tiles and on 45-degree diagonals, and stands every building upright beside them, like the game’s own map. 0 draws roads as they are.'],
+  straight_roads:      ['Knox County roads', '1 lays every road in straight runs along the tiles and on 45-degree diagonals. 0 draws roads as they are.'],
   max_size:            ['Largest building', 'Footprints above this are skipped.'],
   apartment_footprint: ['Flats above', 'An untagged footprint this big reads as flats.'],
   apartment_chance:    ['Flats chance', 'How often such a footprint really becomes flats.'],
   max_levels:          ['Tallest building', 'Storeys, up to 30 - as tall as the base game gets. OSM heights are capped to this. Tall cities take longer to compile.'],
   room_size:           ['Room size', 'Target room area in tiles before it gets split.'],
-  square_buildings:    ['Square up buildings', 'Buildings turned less than this many degrees stand upright on the grid; the rest keep their real angle with stepped walls. 45 = every building upright.'],
+  building_alignment:  ['Building alignment', 'Real preserves the mapped outline. Smart squares near-grid buildings. Rectilinear aligns the dominant wall direction while keeping the footprint shape. Rectangle uses a clean box.'],
   neighbourhood_tiles: ['Neighbourhood', 'How far one set of materials reaches.'],
   style_oddity:        ['Odd one out', 'How often a building breaks from its block.'],
   parking_density:     ['Parking', 'Vehicles only ever spawn in a parking stall.'],
@@ -374,6 +374,8 @@ function buildSettingsForm(values) {
     const isInt = settingsMeta.types
       ? settingsMeta.types[key] === 'int'
       : Number.isInteger(settingsMeta.defaults[key]);
+    const choices = settingsMeta.options?.[key];
+    const isChoice = Array.isArray(choices);
     const wrap = document.createElement('div');
     wrap.className = 'setting';
     // A seed is an identifier, not a quantity: nobody wants to drag a slider
@@ -382,11 +384,14 @@ function buildSettingsForm(values) {
       ? `<div class="seed-row"><input type="number" data-key="${key}" min="${lo}"
            max="${hi}" step="1" value="${values[key]}"><button type="button"
            class="dice" title="Random seed">random</button></div>`
+      : isChoice
+      ? `<select data-key="${key}">${choices.map(([value, name]) =>
+          `<option value="${value}"${value === values[key] ? ' selected' : ''}>${name}</option>`).join('')}</select>`
       : `<input type="range" data-key="${key}" min="${lo}" max="${hi}"
            step="${isInt ? 1 : 0.05}" value="${values[key]}">`;
     wrap.innerHTML = `
       <div class="setting-head"><span class="setting-name">${label}</span>
-        ${key === 'seed' ? '' : `<output class="setting-val">${values[key]}</output>`}</div>
+        ${key === 'seed' || isChoice ? '' : `<output class="setting-val">${values[key]}</output>`}</div>
       ${control}
       <span class="setting-hint">${hint}</span>`;
     body.appendChild(wrap);
@@ -396,9 +401,11 @@ function buildSettingsForm(values) {
 
 function readSettings() {
   const out = { preset: document.getElementById('preset').value };
-  for (const el of document.querySelectorAll('#advanced-body input[data-key]')) {
+  for (const el of document.querySelectorAll('#advanced-body [data-key]')) {
     // Blank means "whatever the preset says" rather than zero.
-    if (el.value.trim() !== '') out[el.dataset.key] = parseFloat(el.value);
+    if (el.value.trim() !== '') {
+      out[el.dataset.key] = el.tagName === 'SELECT' ? el.value : parseFloat(el.value);
+    }
   }
   return out;
 }

@@ -146,5 +146,12 @@ class Explain(unittest.TestCase):
         self.assertIn("internet", osm.explain(requests.ConnectionError("x")))
 
 
+class QueryFilters(unittest.TestCase):
+    def test_fetches_entrance_nodes(self):
+        self.assertIn('node["entrance"]', osm.OVERPASS_FILTERS)
+        self.assertIn('node["entrance"]', osm._build_query(*BOX))
+        self.assertEqual(osm.FILTERS_VERSION, 12)
+
+
 if __name__ == "__main__":
     unittest.main()

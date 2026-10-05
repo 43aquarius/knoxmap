@@ -1,19 +1,9 @@
-"""Put a real building footprint onto the tile grid.
+"""Fit real OSM building outlines to the game's axis-aligned tile grid.
 
-Project Zomboid buildings cannot be rotated. The first approach squared every
-footprint up into an upright rectangle with the right side lengths, centred on
-the real one. That is tidy, and wrong for most real towns: in the Turkish town
-this was measured on, 61% of buildings stand more than 15 degrees off the
-grid, and 37% of the squared-up rectangles covered less than 70% of the real
-footprint. A street of houses running diagonally became a scatter of upright
-boxes jutting into the road - buildings in the right places, but not a town
-anyone would recognise.
-
-So a building close to the grid is still squared up, because a wall with a
-one-tile step every eight tiles looks like a mistake. Anything turned further
-is rasterised as it really is: a tile belongs to the building when the middle
-of that tile lies inside the real outline. The result has stepped walls along
-its diagonal sides, and it stands exactly where the building stands.
+Real rasterizes the mapped polygon. Smart straightens near-grid footprints,
+rectifying nonrectangular shapes and boxing only near-rectangles. Rectilinear
+aligns every footprint's dominant wall direction while preserving its L-shapes
+and notches. Rectangle uses the minimum rotated rectangle as a clean box.
 """
 from __future__ import annotations
 
@@ -21,6 +11,7 @@ import math
 
 import numpy as np
 import shapely
+from shapely.affinity import rotate as rotate_geometry
 from shapely.geometry import Polygon
 
 # Within this many degrees of the grid, square the building up.
@@ -28,6 +19,9 @@ SNAP_DEGREES = 8.0
 # A footprint filling this share of its rotated rectangle is a rectangle.
 RECTANGULAR_ENOUGH = 0.86
 MIN_TILES = 16
+RECTILINEAR_SIMPLIFY_TOLERANCE = 1.0
+
+BUILDING_ALIGNMENT_OPTIONS = {"real", "smart", "rectilinear", "rectangle"}
 
 
 def _polygon(px: list[tuple[float, float]]):
@@ -50,6 +44,38 @@ def grid_angle(poly) -> float:
     long_edge = e1 if math.hypot(*e1) >= math.hypot(*e2) else e2
     a = abs(math.degrees(math.atan2(long_edge[1], long_edge[0]))) % 90.0
     return min(a, 90.0 - a)
+
+
+def _orthogonal_rotation(poly) -> float:
+    """Rotation that takes the dominant wall direction to the nearest grid axis."""
+    rect = poly.minimum_rotated_rectangle
+    coords = list(rect.exterior.coords) if hasattr(rect, "exterior") else []
+    if len(coords) < 4:
+        return 0.0
+    edge1 = (coords[1][0] - coords[0][0], coords[1][1] - coords[0][1])
+    edge2 = (coords[2][0] - coords[1][0], coords[2][1] - coords[1][1])
+    long_edge = edge1 if math.hypot(*edge1) >= math.hypot(*edge2) else edge2
+    angle = math.degrees(math.atan2(long_edge[1], long_edge[0]))
+    return -((angle + 45.0) % 90.0 - 45.0)
+
+
+def rectilinearize_polygon(poly):
+    """Align a footprint's dominant axis to the tile grid and simplify small
+    survey jogs without replacing its outline with a bounding rectangle.
+
+    The map itself is rotated before footprints reach this function, so this
+    aligns a building to that frame (and thus to the selected road grid) while
+    keeping L-shaped and notched footprints recognizable.
+    """
+    rotation = _orthogonal_rotation(poly)
+    aligned = rotate_geometry(poly, rotation, origin="centroid") \
+        if abs(rotation) > 1e-6 else poly
+    aligned = aligned.simplify(RECTILINEAR_SIMPLIFY_TOLERANCE, preserve_topology=True)
+    if not aligned.is_valid:
+        aligned = aligned.buffer(0)
+    if aligned.geom_type == "MultiPolygon":
+        aligned = max(aligned.geoms, key=lambda part: part.area)
+    return aligned
 
 
 def _largest_component(mask: np.ndarray) -> np.ndarray:
@@ -83,12 +109,18 @@ class Footprint:
     """Where one building goes: its bounding box and which tiles it owns."""
 
     def __init__(self, x0: int, y0: int, mask: np.ndarray, angle: float,
-                 short_side: float, long_side: float):
+                 short_side: float, long_side: float,
+                 point_origin: tuple[float, float] | None = None,
+                 point_rotation: float = 0.0,
+                 point_offset: tuple[float, float] = (0.0, 0.0)):
         self.x0, self.y0 = x0, y0
         self.mask = mask
         self.angle = angle
         self.short_side = short_side
         self.long_side = long_side
+        self.point_origin = point_origin
+        self.point_rotation = point_rotation
+        self.point_offset = point_offset
 
     @property
     def width(self) -> int:
@@ -107,6 +139,16 @@ class Footprint:
         if self.mask.all():
             return None
         return self.mask.tolist()
+
+    def transform_point(self, x: float, y: float) -> tuple[float, float]:
+        """Move a mapped point with the geometry transform used by this mask."""
+        if self.point_origin is None or not self.point_rotation:
+            return x + self.point_offset[0], y + self.point_offset[1]
+        cx, cy = self.point_origin
+        angle = math.radians(self.point_rotation)
+        dx, dy = x - cx, y - cy
+        return (cx + dx * math.cos(angle) - dy * math.sin(angle) + self.point_offset[0],
+                cy + dx * math.sin(angle) + dy * math.cos(angle) + self.point_offset[1])
 
 
 # A unit narrower than this is not a building anyone can walk into: three
@@ -153,7 +195,8 @@ def split_row(fp: "Footprint", unit_tiles: int,
         x0 = fp.x0 + (a if along_x else 0) + int(cols[0])
         y0 = fp.y0 + (0 if along_x else a) + int(rows[0])
         out.append(Footprint(x0, y0, part, fp.angle,
-                             fp.short_side, fp.long_side / units))
+                     fp.short_side, fp.long_side / units,
+                     fp.point_origin, fp.point_rotation, fp.point_offset))
     return out or [fp]
 
 
@@ -258,7 +301,8 @@ def place(px: list[tuple[float, float]], occupied: np.ndarray,
           min_side: float = 0, max_side: float = 1e9,
           snap_degrees: float = SNAP_DEGREES,
           avoid: np.ndarray | None = None,
-          lots: np.ndarray | None = None
+          lots: np.ndarray | None = None,
+          alignment: str = "smart"
           ) -> tuple[Footprint | None, str]:
     """Rasterise a projected footprint, claiming its tiles in `occupied`.
 
@@ -292,11 +336,24 @@ def place(px: list[tuple[float, float]], occupied: np.ndarray,
         return None, "large"
     angle = grid_angle(poly)
     rectangular = rect.area > 0 and poly.area / rect.area >= RECTANGULAR_ENOUGH
+    point_origin = (poly.centroid.x, poly.centroid.y)
+    point_rotation = 0.0
+    if alignment not in BUILDING_ALIGNMENT_OPTIONS:
+        alignment = "smart"
+    box_alignment = alignment == "rectangle" or (
+        alignment == "smart" and angle <= snap_degrees
+        and (rectangular or snap_degrees >= 30))
+    rectilinear_alignment = (alignment == "rectilinear"
+                             or (alignment == "smart" and not box_alignment
+                                 and angle <= snap_degrees and not rectangular))
+    if rectilinear_alignment:
+        point_rotation = _orthogonal_rotation(poly)
+        poly = rectilinearize_polygon(poly)
 
-    # Past 30 degrees a turned outline squared up would stand far out of its
-    # real footprint, so from there any shape is squared (the user asked for
-    # every building on the grid), not just near-rectangles.
-    if angle <= snap_degrees and (rectangular or snap_degrees >= 30):
+    # Rectangle discards nonrectangular details; Smart only boxes near-grid
+    # footprints that are already close to rectangular.
+    if box_alignment:
+        point_rotation = _orthogonal_rotation(poly)
         # Square it up: an upright rectangle of the true side lengths, centred.
         cx, cy = poly.centroid.x, poly.centroid.y
         horizontal = (angle == 0.0 and (poly.bounds[2] - poly.bounds[0])
@@ -317,8 +374,10 @@ def place(px: list[tuple[float, float]], occupied: np.ndarray,
         xs, ys = np.meshgrid(np.arange(x0, x1) + 0.5, np.arange(y0, y1) + 0.5)
         mask = shapely.contains_xy(poly, xs, ys)
 
+    before_nudge = (x0, y0)
     if avoid is not None:
         x0, y0 = _clear_of(mask, x0, y0, avoid, occupied)
+    point_offset = (x0 - before_nudge[0], y0 - before_nudge[1])
 
     # Clip to the map, then give up tiles already owned by a neighbour.
     h, w = mask.shape
@@ -348,4 +407,5 @@ def place(px: list[tuple[float, float]], occupied: np.ndarray,
     occupied[fy0:fy0 + mask.shape[0], fx0:fx0 + mask.shape[1]] |= mask
     if lots is not None:
         lots[fy0:fy0 + mask.shape[0], fx0:fx0 + mask.shape[1]] = True
-    return Footprint(fx0, fy0, mask, angle, sides[0], sides[1]), "ok"
+    return Footprint(fx0, fy0, mask, angle, sides[0], sides[1],
+                     point_origin, point_rotation, point_offset), "ok"
