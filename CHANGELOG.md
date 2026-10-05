@@ -2,6 +2,12 @@
 
 ## 1.4.8
 
+- **The compiler stops answering windows that have no title** (`tools/compile_map.py`).
+  WorldEd's dialog watcher took every window it was handed, including untitled
+  ones and its own "Generate Lots" progress box, and kept answering them - on a
+  hidden desktop that turned into a stream of dismissals that got nowhere. It
+  skips both now. Thanks to @alexandruborcan (#15).
+
 - **Setup spots an MSYS or Cygwin Python** (`Setup.bat`). A .venv built by one
   of those has a unix-style `bin` folder rather than `Scripts`, and installs
   packages badly or not at all. Setup now notices the `bin` layout, says so,
