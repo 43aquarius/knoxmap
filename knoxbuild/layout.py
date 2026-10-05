@@ -3273,10 +3273,28 @@ VENDING_ROOMS = {"cafe", "lobby", "gym", "classroom", "clinic", "breakroom"}
 ERIKA_SHELF_SHARE = 0.5
 
 _ERIKA: list[bool] = []
+# Set from the map's settings before anything is laid out. None means nobody
+# has said, and the answer is whatever is installed.
+_ERIKA_ALLOWED: list[bool] = []
+
+
+def use_mod_tiles(allowed: bool) -> None:
+    """Say whether this map may use Erika's Tiles, whatever is installed.
+
+    A map built with the mod's tiles needs the mod to look right, and a player
+    who would rather keep to the game's own art - or hand the map to somebody
+    who has not subscribed - has no way back once it is built. The settings
+    carry the answer (vanilla_tiles), and the build sets it here before the
+    first building, because the check below is asked once and remembered.
+    """
+    _ERIKA_ALLOWED[:] = [bool(allowed)]
+    _ERIKA.clear()
 
 
 def _erika_ready() -> bool:
     """Whether buildings may use Erika's Tiles; asked once per process."""
+    if _ERIKA_ALLOWED and not _ERIKA_ALLOWED[0]:
+        return False
     if not _ERIKA:
         import os
         try:
@@ -4567,9 +4585,24 @@ def build_building(width: int, height: int, levels: int = 1,
     # shop, a restaurant or a bank in a building that is more than one.
     shops = kind in ("apartment", "civic") and core is not None and (
         (retail and kind == "apartment" and levels >= 3) or (bool(uses) and levels >= 2))
+    # A block of flats repeats its floor plan. Looking up at one from the
+    # street the windows line up all the way, because every floor above the
+    # ground is the same floor - and ours did not, because each storey was
+    # laid out from its own seed. Most windows landed in the same bays anyway
+    # and a handful drifted, which is worse than either being aligned or
+    # being obviously different. Floors that share a footprint now share a
+    # seed, so they share a layout; the ground floor keeps its own (it has the
+    # entrance, and the shops when there are any), and a setback starts a new
+    # one because the floors above it are a different shape.
+    def _plan_seed(lvl: int) -> int:
+        if kind != "apartment" or lvl == 0:
+            return seed + 977 * lvl
+        above = bool(setback_at) and lvl >= setback_at
+        return seed + 977 * (1 + int(above))
+
     storeys = [
         build_plan(width, height, commercial=commercial or (shops and lvl == 0),
-                   seed=seed + 977 * lvl,
+                   seed=_plan_seed(lvl),
                    kind="retail" if shops and lvl == 0 else kind,
                    mask=upper_mask if setback_at and lvl >= setback_at else mask,
                    ground=(lvl == 0), settings=settings,

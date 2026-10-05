@@ -916,6 +916,10 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                                    ("max_size", max_size)) if v is not None}
     if overrides:
         settings = Settings.from_dict({**settings.to_dict(), **overrides})
+    # Before any building is laid out: the mod-tile check is asked once and
+    # remembered, so saying this afterwards would be too late for the first.
+    from .layout import use_mod_tiles
+    use_mod_tiles(not settings.vanilla_tiles)
     seed = settings.seed
     min_size = settings.min_size
     max_size = settings.max_size

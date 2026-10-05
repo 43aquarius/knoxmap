@@ -620,6 +620,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     # generator/structures.py; what they leave out of the ground is cut here.
     lifted = structures.Plan()
     structures.plan_bridges(buckets, proj, meters_per_tile, _way_width_m, lifted)
+    structures.plan_piers(buckets, proj, meters_per_tile, _way_width_m, lifted)
     structures.plan_monuments(monument_feats, proj, meters_per_tile, lifted)
     if lifted.not_buildings:
         building_feats = [f for f in building_feats if id(f) not in lifted.not_buildings]

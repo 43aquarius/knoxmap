@@ -7,9 +7,12 @@ as Contents/mods/<mod id> with workshop.txt and preview.png beside it. This
 copies workshop/ there, with the Reset loot code taken from the one KnoxMap
 installs into every map so the two cannot drift apart.
 
-Afterwards: Project Zomboid -> Workshop -> Create and Upload. Steam gives the
-item an id; put it in workshop/workshop.txt as id=<number> and every later
-run updates that item instead of making a second one.
+Afterwards: Project Zomboid -> Workshop -> Create and Upload, and pick the
+folder this wrote - "KnoxMap" unless --name says otherwise. The uploader lists
+that folder, not the mod id inside it, so there is nothing called KnoxMapTools
+to choose there. Steam gives the item an id; put it in workshop/workshop.txt
+as id=<number> and every later run updates that item instead of making a
+second one.
 """
 from __future__ import annotations
 

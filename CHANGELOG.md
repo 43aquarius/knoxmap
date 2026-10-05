@@ -1,5 +1,78 @@
 # Changelog
 
+## 1.4.8.5
+
+- **A pier has railings along the water** (`generator/structures.py`,
+  `generator/renderer.py`, suggested by Zombaxx). A jetty was painted onto the
+  ground like a path and left there, with nothing along either side: it read
+  as a concrete strip laid on the water rather than as something built over
+  it, and you walked off the end without a thing in the way. The pass that
+  already rails a bridge over water now rails piers too, which puts a rail on
+  every edge whose neighbour is water and leaves the landward end open by
+  itself. A jetty into a lake went from no railing to 439 tiles of it.
+
+- **Vanilla tiles only, as a setting** (`knoxbuild/settings.py`,
+  `knoxbuild/layout.py`, `knoxbuild/build.py`, `static/js/app.js`). A map built
+  with Erika's Tiles needs Erika's Tiles to look right, and until now the only
+  way to build without them was to uninstall the mod or set an environment
+  variable nobody knew about. Turn this on and the game's own art is all that
+  is used, whatever is installed: the same town went from 906 references to
+  the mod's tiles to none. Nothing else has to be done about it - the map mod
+  works out whether to require the mod by looking for its tiles in the
+  compiled cells, so a map built this way asks for nothing and opens for
+  somebody who has not subscribed.
+
+- **A block of flats repeats its floor plan** (`knoxbuild/layout.py`, suggested
+  by Badgomatic). Looking up at one from the street the windows line up all
+  the way, because every floor above the ground is the same floor. Ours laid
+  each storey out from its own seed, so most windows landed in the same bays
+  and a handful drifted - 27 to 32 of about 32 shared between neighbouring
+  floors, which reads worse than either lining up or being plainly different.
+  Floors that share a footprint now share a seed and so share a layout: every
+  floor above the ground is identical, and a setback starts a new one because
+  the floors above it are a different shape. The ground floor keeps its own -
+  it has the entrance, and the shops when there are any. It is not faster to
+  generate, which was the other half of the suggestion: each storey is still
+  laid out, it just comes out the same.
+
+## 1.4.8.4
+
+- **The logo again, and on the Steam page this time** (`branding/`,
+  `static/logo.png`, `workshop/preview.png`, `tools/make_workshop_art.py`).
+  The ground tile the zombie stands on is green rather than black. The art
+  arrived with a black background baked in where the old one had none, which
+  would have put a black square behind the window's favicon, so only the black
+  that reaches the edge is taken out - the chimney and the shadows inside the
+  mouth are black too and have to stay. The Steam card keeps its map render
+  and its wordmark and now carries the logo in the band, so the mark on the
+  item is the mark in the window and on the launcher; the strapline sizes
+  itself to whatever room the logo leaves, having run off the edge at
+  "PROJECT ZOM" when it did not.
+
+- **A card that reads at the size Steam shows it**
+  (`tools/make_workshop_art.py`). The thumbnail is cut from the roofs-on
+  render now rather than the roofs-off one. The rooms are what is worth
+  showing and the gallery still shows them, but the card is looked at about a
+  hundred pixels wide in a list of other people's cards, and at that size a
+  floor of furnished rooms is a beige smudge - every colour in it is a shade
+  of the same thing. Roofs on there is red against grey against the green of
+  the park, which survives being shrunk. The crop is picked by scoring the
+  render for how much of it is not the black surround, counting saturated
+  pixels twice. The mark and the wordmark are bigger to go with it, and both
+  lines are placed off their real ink box rather than the nominal font size,
+  which had sat the strapline in the wordmark's descenders.
+
+- **The rifle drop stopped writing Java into console.txt**
+  (`knoxbuild/lua/guncache.lua`). OnFillContainer is
+  (roomName, containerType, itemContainer), and the square comes off the
+  container's parent - that is what the game's own LootLog.lua does. Ours took
+  whichever argument answered getSourceGrid instead, which is neither how
+  vanilla finds the square nor a method the object has: Build 42 hands the
+  event an ItemPickerContainer, and asking a Java object for a method it has
+  not got raises inside Kahlua. The pcall caught it, so nothing broke, but the
+  engine logs the stack trace before the pcall ever sees it - sixty-odd pages
+  of it in one player's session. It follows the documented signature now.
+
 ## 1.4.8.3
 
 - **The instances are asked whether they are up before the download starts**

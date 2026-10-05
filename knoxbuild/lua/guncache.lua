@@ -35,18 +35,23 @@ local MODDATA = "KnoxMapGunCache"
 local SKIP = { inventorymale = true, inventoryfemale = true, floor = true }
 local NEEDED_CAPACITY = 12
 
---- The container out of whatever OnFillContainer was called with.
--- The event passes (roomName, containerType, container), but rather than
--- trust an argument order across game versions this takes whichever of them
--- answers getSourceGrid - only a container does. The plain ones are turned
--- away on their type first: a method call on a string raises "Tried to call
--- nil", which the pcall catches but the game still logs.
-local PLAIN = { string = true, number = true, boolean = true, ["function"] = true }
-
-local function asContainer(value)
-    if value == nil or PLAIN[type(value)] then return nil end
-    local ok, grid = pcall(function() return value:getSourceGrid() end)
-    if ok and grid then return value end
+--- The square a container sits on, or nil.
+-- OnFillContainer(roomName, containerType, itemContainer) is the signature
+-- the game's own LootLog.lua uses, and the square comes off the container's
+-- parent, as it does there. This used to take whichever argument answered
+-- getSourceGrid, which is not how vanilla finds the square and is not a
+-- method the object has: Build 42 hands the event an ItemPickerContainer,
+-- and indexing a Java object for a method it has not got raises inside
+-- Kahlua. The pcall caught it, but the engine logs the whole stack trace
+-- before the pcall ever sees it, so every container filled anywhere near one
+-- of these boxes wrote a page of Java into console.txt.
+local function squareOf(container)
+    if container == nil or type(container) ~= "userdata" then return nil end
+    local ok, square = pcall(function()
+        local parent = container:getParent()
+        return parent and parent:getSquare() or nil
+    end)
+    if ok then return square end
     return nil
 end
 
@@ -60,13 +65,14 @@ local function boxFor(x, y)
     return nil
 end
 
-local function onFillContainer(a, b, c)
+local function onFillContainer(_roomName, _containerType, container)
     if #KnoxMapGunCache.boxes == 0 then return end
-    local container = asContainer(c) or asContainer(b) or asContainer(a)
-    if not container then return end
-    if SKIP[container:getType()] then return end
+    local square = squareOf(container)
+    if not square then return end
 
-    local square = container:getSourceGrid()
+    local ok, kind = pcall(function() return container:getType() end)
+    if ok and kind and SKIP[kind] then return end
+
     local box = boxFor(square:getX(), square:getY())
     if not box then return end
 
@@ -75,8 +81,8 @@ local function onFillContainer(a, b, c)
 
     -- Big enough to hold it? If not, leave the flag alone: the next container
     -- in the same building gets the chance instead.
-    local capacity = container:getMaxWeight()
-    if capacity and capacity < NEEDED_CAPACITY then return end
+    local fits, capacity = pcall(function() return container:getMaxWeight() end)
+    if fits and capacity and capacity < NEEDED_CAPACITY then return end
 
     for _, item in ipairs(box.items or KnoxMapGunCache.ITEMS) do
         container:AddItem(item)

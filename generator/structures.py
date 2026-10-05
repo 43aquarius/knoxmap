@@ -515,6 +515,30 @@ def _storeys(tags: dict, default: int, meters_per_level: float = 3.0) -> int:
         return default
 
 
+def plan_piers(buckets: dict, proj, meters_per_tile: float, way_width,
+               plan: Plan) -> None:
+    """Railings along a pier, where it stands over the water.
+
+    A jetty is painted onto the ground like a path and left there, as the
+    game's own bridges over water are - the terrain bitmap is one storey, and
+    a deck raised over water in a game with no swimming is a deck nobody can
+    reach the underneath of. What it was missing is the railing: a pier ran
+    out into a river with nothing along either side, so it read as a concrete
+    strip laid on the water rather than as something built over it, and you
+    walked off the end of it without a thing in the way.
+
+    The same pass that rails a bridge over water does this one (rail_water):
+    it puts a rail on every edge whose neighbour is water, so the landward end
+    where the pier meets the bank is left open by itself.
+    """
+    for feat in buckets.get("pier", []):
+        line = _line_px(feat, proj)
+        if line is None or line.length < 2:
+            continue
+        width = max(1.0, way_width(feat, "pier") / meters_per_tile)
+        plan.water_rails.append(line.buffer(width / 2, cap_style=2))
+
+
 def plan_monuments(feats: list, proj, meters_per_tile: float, plan: Plan) -> None:
     for feat in feats:
         kind = monument_kind(feat.tags)

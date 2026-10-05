@@ -40,13 +40,26 @@ BACKGROUND = (20, 24, 15)
 # rest instead of being squeezed into a strip.
 WORDMARK = "KnoxMap"
 STRAPLINE = "REAL PLACES, PLAYABLE IN PROJECT ZOMBOID"
-GREEN = (165, 226, 102)          # the pin in branding/logo.svg
+GREEN = (165, 226, 102)          # the green of the ground tile in the logo
 INK = (18, 22, 14)
-BAND = 120
-# Of the 1920x1080 render, the quarter with the most furnished rooms in it
-# and a corner of the park for colour. The rooms are what is worth showing:
-# a park at this size is a green blob.
-THUMB_CROP = (480, 280, 1280, 1080)
+BAND = 150
+WORDMARK_PX = 72
+# The logo sits in the band, left of the wordmark, so the mark on the Steam
+# card is the mark in the window and on the launcher. It is pixel art, so it
+# is scaled by whole numbers and with nearest - anything smoother turns the
+# one-pixel teeth and the chimney to mush at this size.
+LOGO = BASE_DIR / "branding" / "logo.png"
+LOGO_BOX = 128
+# The thumbnail is cut from the roofs-on render, not the roofs-off one. The
+# rooms are what is worth showing and the gallery shows them, but a card is
+# looked at about a hundred pixels wide in a list of other people's cards, and
+# at that size a floor of furnished rooms is a beige smudge - every colour in
+# it is a shade of the same thing. Roofs on, there is red against grey against
+# the green of the park, which still reads when it is thumbnail-sized. The
+# crop is scored for exactly that: how much of it is not the black surround,
+# counting saturated pixels twice.
+THUMB_SOURCE = "01-town.png"
+THUMB_CROP = (500, 160, 1300, 960)
 # Bold and wide, whatever the machine has. The picture ships, not the font.
 FONTS = ("segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf",
          "LiberationSans-Bold.ttf", "Helvetica.ttc")
@@ -77,9 +90,40 @@ def thumbnail(render: Path) -> Image.Image:
     im = im.resize(PREVIEW, Image.Resampling.LANCZOS)
     im.paste(Image.new("RGB", (PREVIEW[0], BAND), GREEN), (0, PREVIEW[1] - BAND))
     draw = ImageDraw.Draw(im)
-    draw.text((26, PREVIEW[1] - BAND + 10), WORDMARK, font=_font(58), fill=INK)
-    draw.text((29, PREVIEW[1] - BAND + 82), STRAPLINE, font=_font(18),
-              fill=(44, 60, 28))
+    left = 16
+    if LOGO.exists():
+        mark = Image.open(LOGO).convert("RGBA")
+        step = max(1, min(mark.width, mark.height) // LOGO_BOX)
+        mark = mark.resize((mark.width // step, mark.height // step),
+                           Image.Resampling.NEAREST)
+        top = PREVIEW[1] - BAND + (BAND - mark.height) // 2
+        im.paste(mark, (left, top), mark)
+        left += mark.width + 14
+
+    word_font = _font(WORDMARK_PX)
+    # The strapline is as big as it can be and still end inside the card: the
+    # logo takes a hundred-odd pixels off the line, and at a fixed size it ran
+    # off the edge mid-word - "PLAYABLE IN PROJECT ZOM".
+    room = PREVIEW[0] - left - 14
+    size = 20
+    strap_font = _font(9)
+    while size > 9:
+        font = _font(size)
+        if draw.textlength(STRAPLINE, font=font) <= room:
+            strap_font = font
+            break
+        size -= 1
+    # Both are placed off their real ink box rather than the nominal font
+    # size, which is not where the glyphs end: spacing them by the size alone
+    # sat the strapline in the wordmark's descenders.
+    wb = draw.textbbox((0, 0), WORDMARK, font=word_font)
+    sb = draw.textbbox((0, 0), STRAPLINE, font=strap_font)
+    gap = 8
+    block = (wb[3] - wb[1]) + gap + (sb[3] - sb[1])
+    y = PREVIEW[1] - BAND + (BAND - block) // 2
+    draw.text((left, y - wb[1]), WORDMARK, font=word_font, fill=INK)
+    draw.text((left + 3, y + (wb[3] - wb[1]) + gap - sb[1]), STRAPLINE,
+              font=strap_font, fill=(44, 60, 28))
     return im
 
 
@@ -208,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         picture.save(SHOTS / filename)
         print(f"wrote {SHOTS / filename}")
 
-    preview = thumbnail(SHOTS / "02-town.png")
+    preview = thumbnail(SHOTS / THUMB_SOURCE)
     preview.save(OUT / "preview.png")
     print(f"wrote {OUT / 'preview.png'}")
 

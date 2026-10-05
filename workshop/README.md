@@ -54,7 +54,13 @@ The game's own uploader reads from `~/Zomboid/Workshop/<folder>`:
 1. `python tools/make_workshop.py` — copies this folder there, with the
    current Reset loot code and the version from CHANGELOG.md.
 2. Start Project Zomboid → **Workshop** → **Create and Upload**.
-3. Pick **KnoxMapTools**, check the description and the pictures, upload.
+3. Pick **KnoxMap** — the uploader lists the folder under
+   `~/Zomboid/Workshop`, which is what `--name` sets, not the mod id
+   inside it. Three names are in play and only this one is picked here:
+   the folder `KnoxMap` (the uploader), the id `KnoxMapTools` (the
+   folder under `Contents/mods`), and `KnoxMap Tools - Reset loot`
+   (`name=` in mod.info, which is what subscribers see in their Mods
+   list). Check the description and the pictures, then upload.
 4. Steam gives the item an id. Put it in `workshop.txt` as `id=<number>` so
    the next upload updates this item instead of making another.
 

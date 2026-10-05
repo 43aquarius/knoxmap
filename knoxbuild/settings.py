@@ -88,6 +88,9 @@ class Settings:
     apartment_footprint: int = 150
     apartment_chance: float = 0.55
     max_levels: int = 6
+    # 1 builds with the game's own tiles only, leaving Erika's Tiles out
+    # even when it is installed.
+    vanilla_tiles: int = 0
     # Legacy Smart-mode threshold, retained for existing settings files.
     square_buildings: int = 15
     # Target room area in tiles before splitting. Knox County's rooms are 16 m2
@@ -174,6 +177,7 @@ LIMITS = {
     # storey is a full floor of rooms and furniture, so tall towns cost build
     # and compile time - the presets stay low and this is the ceiling.
     "max_levels": (1, 30),
+    "vanilla_tiles": (0, 1),
     "room_size": (16, 400),
     "building_alignment": (0, 3),
     "square_buildings": (0, 45),
