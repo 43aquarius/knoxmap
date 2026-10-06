@@ -26,6 +26,7 @@ from PIL import Image
 
 from generator import pz_colors as C
 
+from .bitmaps import read_rgb, same_colour
 from .structures import CELL, render_tiles_tbx
 
 # location_community_cemetary_01: headstones, wooden crosses and the angel on
@@ -67,7 +68,7 @@ BLOCKED = ROAD | {C.WATER}
 def _blocked_mask(ground: np.ndarray) -> np.ndarray:
     out = np.zeros(ground.shape[:2], dtype=bool)
     for colour in BLOCKED:
-        out |= np.all(ground == colour, axis=2)
+        out |= same_colour(ground, colour)
     return out
 
 
@@ -99,12 +100,12 @@ def place_props(out_dir: str, map_name: str, bdir: str, occupied: np.ndarray,
     if not cemeteries and not bases:
         return [], counts
 
-    ground = np.array(Image.open(bmp).convert("RGB"))
+    ground = read_rgb(bmp)
     height, width = ground.shape[:2]
     blocked = _blocked_mask(ground)
     blocked |= occupied[:height, :width]
     veg_path = os.path.join(out_dir, f"{map_name}_veg.bmp")
-    veg = np.array(Image.open(veg_path).convert("RGB")) if os.path.exists(veg_path) else None
+    veg = read_rgb(veg_path) if os.path.exists(veg_path) else None
     rng = random.Random(seed)
     tiles: list[tuple[int, int, int, str, str]] = []
 

@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+- **Big maps no longer fail Generate buildings with "exceeds limit of 178956970
+  pixels, could be decompression bomb DOS attack"** (`generator/__init__.py`,
+  `knoxbuild/__init__.py`). Pillow's guard refused any bitmap past 179 Mpx, a
+  map of about 260 km2 at 1 m a tile. The bitmaps are KnoxMap's own output, and
+  the memory check in `app.py` already covers what the guard was standing in
+  for, so the limit is lifted.
+
+- **The building step holds one copy of each bitmap, not three**
+  (`knoxbuild/bitmaps.py`, used by `build`, `yards`, `pumps`, `props`,
+  `fences`). `np.array(Image.open(p).convert("RGB"))` decoded, converted and
+  copied; the plain 24-bit and 8-bit BMPs the renderer writes are now read a
+  strip of rows at a time into one array, byte for byte what Pillow returns.
+  `np.all(rgb == colour, axis=2)` built a boolean three times the map's size
+  for every colour; `same_colour` does not. Anything that is not a plain BMP
+  goes through Pillow as before.
+
+- **Generate buildings is faster** (`knoxbuild/build.py`, `knoxbuild/yards.py`).
+  Fences, the zombie spawn map, the paper map, the zones and the bridges each
+  read the finished ground and change nothing another one reads, so they run
+  on threads; the doors the yard step needs are read on threads too. 7200 x
+  4800 tiles: 118 s to about 71 s. Every output file except the `.tbx`
+  interiors (which already differ between any two runs) is identical to before.
+
+- **The window says what Generate buildings will need, and offers a scale
+  that fits** (`app.py`, `static/js/app.js`). The area panel shows the memory
+  of the building step (measured at 20 bytes a tile, estimated at 24) beside
+  the bitmap, `/api/buildings` refuses up front on a 32-bit Python and turns a
+  `MemoryError` into a message, and a heavy map gets a "Use N m/tile" button.
+  The soft caps are now 1000 km2 and 20000 tiles a side. They only warn.
+
+- **No more piles of "PZWorldEd error plausible" popups during a compile**
+  (`tools/compile_map.py`). Any WorldEd window open for over a minute counted
+  as an error, and "Loading resources" always is on a big map; each got a modal
+  popup and was then closed. Only a window whose title says error, warning or
+  exception is acted on, it is said in the compile output instead of a popup,
+  and a long-open window is left alone.
+
+- **`tools/compile_compare.py`** compiles a copy of a map with N workers and
+  compares every lot file with the original's. Six workers on 8 cores and 32 GB
+  made WorldEd fail with "Error Loading Image", so the default stays at 3.
+
 ## 1.5.1
 
 - **A house has a believable number of bedrooms** (`knoxbuild/layout.py`,

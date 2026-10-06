@@ -25,6 +25,8 @@ from PIL import Image
 
 from generator import pz_colors as C
 
+from .bitmaps import read_rgb, same_colour
+
 PATH_MAX_TILES = 40
 DRIVE_WIDTH = 3
 DRIVE_EXTRA = 5          # how far the drive runs past the front of the house
@@ -114,14 +116,14 @@ def paint_paths(out_dir: str, map_name: str, rows: list[dict], occupied,
         shutil.copyfile(bmp, base)
     if os.path.exists(veg_path) and not os.path.exists(veg_base):
         shutil.copyfile(veg_path, veg_base)
-    ground = np.array(Image.open(base).convert("RGB"))
-    veg = np.array(Image.open(veg_base).convert("RGB")) if os.path.exists(veg_base) else None
+    ground = read_rgb(base)
+    veg = read_rgb(veg_base) if os.path.exists(veg_base) else None
     h, w = ground.shape[:2]
 
     def match(colours):
         mask = np.zeros((h, w), dtype=bool)
         for c in colours:
-            mask |= np.all(ground == c, axis=2)
+            mask |= same_colour(ground, c)
         return mask
 
     paved = match(PAVED)
@@ -145,10 +147,19 @@ def paint_paths(out_dir: str, map_name: str, rows: list[dict], occupied,
     dressed = 0
     fences = []
     rng = random.Random(0xB17E)
+    # Reading a thousand freshly written .tbx files is mostly waiting on the
+    # disk, so it is done on threads up front; the loop below still runs in
+    # order, which keeps the random choices the same.
+    from concurrent.futures import ThreadPoolExecutor
+    house_files = [r["file"] for r in rows if r.get("kind") == "house"]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        door_lists = dict(zip(house_files, pool.map(
+            lambda f: _outside_doors(os.path.join(out_dir, "buildings", f)),
+            house_files)))
     for row in rows:
         if row.get("kind") != "house":
             continue
-        doors = _outside_doors(os.path.join(out_dir, "buildings", row["file"]))
+        doors = door_lists[row["file"]]
         if not doors:
             continue
         ox, oy, ix, iy = doors[0]

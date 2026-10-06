@@ -190,21 +190,24 @@ if sys.platform == "win32":
                     
                 elapsed = now - seen_times[hwnd]
                 title_lower = title.lower()
-                
-                is_error = "error" in title_lower or "warning" in title_lower or "exception" in title_lower
-                is_timeout = elapsed > 60.0
-                
-                if is_error or is_timeout:
+
+                # Only a window that says it is an error is worth a popup. A
+                # progress window ("Loading resources") stays open for minutes
+                # on a big map, and closing it would abort the batch, so a long
+                # one is left alone.
+                if "error" in title_lower or "warning" in title_lower or "exception" in title_lower:
                     proxied.add(hwnd)
-                    msg = (f"PZWorldEd popup detected.\n\n"
-                           f"Title: {title}\n"
-                           f"Reason: {'Error keyword in title' if is_error else 'Open for > 1 minute'}\n\n"
-                           f"Click OK to dismiss it and continue.")
-                    # Show on default desktop
-                    ctypes.windll.user32.MessageBoxW(0, msg, "PZWorldEd error plausible", 0)
-                    # Close the hidden window
+                    # Said in the log, not in a popup: a batch that hits one is
+                    # retried, and with several running a popup each is a flood.
+                    # The window is closed so the batch can end and be retried.
+                    print(f"  (WorldEd showed '{title}'; closing it, the batch "
+                          f"will be retried if it failed)", flush=True)
                     ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0) # WM_CLOSE
-                    
+                elif elapsed > 60.0 and hwnd not in proxied:
+                    proxied.add(hwnd)
+                    print(f"  (WorldEd window '{title}' open for {elapsed:.0f}s; leaving it)",
+                          flush=True)
+
                 return True
                 
             c_enum_proc = EnumDesktopWindowsProc(enum_proc)
@@ -570,7 +573,9 @@ def _why(proc) -> str:
 # cores. "compile_workers" in knoxmap_config.json overrides this; 1 is the old
 # one-at-a-time behaviour.
 GB_PER_WORKER = 3.0
-MAX_WORKERS = 3   # what the byte-for-byte comparison was run at
+MAX_WORKERS = 3   # what the byte-for-byte comparison was run at. Six was tried
+                  # on 8 cores / 32 GB: WorldEd failed with "Error Loading Image"
+                  # and most batches needed retries.
 
 
 def default_workers() -> int:

@@ -22,6 +22,7 @@ from PIL import Image
 
 from generator import pz_colors as C
 
+from .bitmaps import read_rgb, same_colour
 from .structures import CELL, render_tiles_tbx
 
 # One tile each, holding 20000 units of fuel. The pump facing south stands in
@@ -73,14 +74,14 @@ def place_pumps(out_dir: str, map_name: str, bdir: str, occupied: np.ndarray,
     canopies = canopies or []
     if not (stations or points or canopies) or not os.path.exists(bmp):
         return [], 0
-    ground = np.array(Image.open(bmp).convert("RGB"))
+    ground = read_rgb(bmp)
     veg_path = os.path.join(out_dir, f"{map_name}_veg.bmp")
-    veg = np.array(Image.open(veg_path).convert("RGB")) if os.path.exists(veg_path) else None
+    veg = read_rgb(veg_path) if os.path.exists(veg_path) else None
     H, W = ground.shape[:2]
 
     blocked = occupied[:H, :W].copy()
     for colour in ROAD | NOT_GROUND:
-        blocked |= np.all(ground == colour, axis=2)
+        blocked |= same_colour(ground, colour)
 
     def clear(x, y, w, h):
         return (x >= 0 and y >= 0 and x + w <= W and y + h <= H
@@ -91,7 +92,7 @@ def place_pumps(out_dir: str, map_name: str, bdir: str, occupied: np.ndarray,
 
     paved = np.zeros((H, W), dtype=bool)
     for colour in ROAD | {C.PALE_CONCRETE, C.DARK_ASPHALT}:
-        paved |= np.all(ground == colour, axis=2)
+        paved |= same_colour(ground, colour)
 
     def reach(x, y, w, h, side):
         """The forecourt run on out to the pavement or road when that is a
