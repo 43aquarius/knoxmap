@@ -885,6 +885,30 @@ UNPAVED_SURFACES = {"unpaved", "dirt", "earth", "ground", "grass", "gravel",
 TUNNEL_VALUES = {"yes", "building_passage", "culvert", "avalanche_protector", "flooded"}
 
 
+HIGHWAY_HIERARCHY = {
+    "motorway": "motorway", "motorway_link": "motorway",
+    "trunk": "trunk", "trunk_link": "trunk",
+    "primary": "primary", "primary_link": "primary",
+    "secondary": "secondary", "secondary_link": "secondary",
+    "tertiary": "tertiary", "tertiary_link": "tertiary",
+    "residential": "residential", "unclassified": "residential",
+    "living_street": "residential", "road": "residential",
+    "service": "service", "footway": "footway", "cycleway": "footway",
+    "bridleway": "footway", "path": "footway", "steps": "footway",
+}
+
+ROAD_HIERARCHY_CODES = {
+    "footway": 1, "service": 2, "residential": 3, "tertiary": 4,
+    "secondary": 5, "primary": 6, "trunk": 7, "motorway": 8,
+}
+ROAD_HIERARCHY_BY_CODE = {code: name for name, code in ROAD_HIERARCHY_CODES.items()}
+
+
+def road_hierarchy(tags: dict) -> str | None:
+    """Detailed street function from the OSM highway tag, if any."""
+    return HIGHWAY_HIERARCHY.get(str(tags.get("highway") or "").lower())
+
+
 def classify(tags: dict, area: bool = False) -> str | None:
     """Map OSM tags to a PZ feature category string. None = ignore.
 

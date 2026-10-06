@@ -527,7 +527,7 @@ def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
 
 def _detect_zones(landscape_path: str, placements, rng_seed: int = 7,
                   settings: Settings | None = None, areas=None, drives=(),
-                  keep_clear=()):
+                  keep_clear=(), road_hierarchy: np.ndarray | None = None):
     """Parking stalls along the roads, town zones over built-up ground.
 
     Without these the streets are bare: vehicles only ever spawn inside
@@ -555,6 +555,8 @@ def _detect_zones(landscape_path: str, placements, rng_seed: int = 7,
     img = Image.open(landscape_path).convert("RGB")
     w, h = img.size
     px = img.load()
+    if road_hierarchy is not None:
+        road_hierarchy = road_hierarchy[:h, :w]
 
     def is_asphalt(x: int, y: int) -> bool:
         """Carriageway or car park, as opposed to the pavement beside it."""
@@ -628,7 +630,16 @@ def _detect_zones(landscape_path: str, placements, rng_seed: int = 7,
                         and is_asphalt(x, y - 8) and is_asphalt(x, y + 8))
             if not kerbside and not car_park:
                 continue
-            chance = (0.75 if car_park else 0.45) * settings.parking_density
+            if car_park:
+                rate = 0.75
+            elif road_hierarchy is None or not road_hierarchy[y, x]:
+                rate = 0.45
+            else:
+                rate = {
+                    1: 0.0, 2: 0.18, 3: 0.55, 4: 0.38,
+                    5: 0.28, 6: 0.16, 7: 0.08, 8: 0.02,
+                }.get(int(road_hierarchy[y, x]), 0.45)
+            chance = rate * settings.parking_density
             if rng.random() > chance:
                 continue
             vertical = is_asphalt(x, y - 2) or is_asphalt(x, y + 2)
@@ -678,7 +689,8 @@ STREET_LOOK_TILES = 40
 RETAIL_DENSITY = 0.28
 
 
-def _street_finder(out_dir: str, map_name: str):
+def _street_finder(out_dir: str, map_name: str,
+                   road_hierarchy: np.ndarray | None = None):
     """A function giving the side ("N", "S", "W" or "E") of a footprint that
     faces the nearest pavement or road, or None if none is near."""
     import numpy as np
@@ -698,7 +710,7 @@ def _street_finder(out_dir: str, map_name: str):
     H, W = paved.shape
 
     def side(x0: int, y0: int, w: int, h: int) -> str | None:
-        best, best_d = None, STREET_LOOK_TILES + 1
+        best, best_score = None, STREET_LOOK_TILES + 1
         for name, (dx, dy) in (("N", (0, -1)), ("S", (0, 1)), ("W", (-1, 0)), ("E", (1, 0))):
             if dx == 0:
                 starts = [(x0 + w * f // 4, y0 if dy < 0 else y0 + h - 1) for f in (1, 2, 3)]
@@ -710,15 +722,28 @@ def _street_finder(out_dir: str, map_name: str):
                     if not (0 <= x < W and 0 <= y < H):
                         break
                     if paved[y, x]:
-                        if d < best_d:
-                            best, best_d = name, d
+                        rank = (int(road_hierarchy[y, x])
+                                if road_hierarchy is not None else 0)
+                        score = d - min(5.0, rank * 0.6)
+                        if score < best_score:
+                            best, best_score = name, score
                         break
         return best
 
     return side
 
 
-def _road_weight(out_dir: str, map_name: str, proj) -> np.ndarray | None:
+def _load_road_hierarchy(out_dir: str, map_name: str, proj) -> np.ndarray | None:
+    from PIL import Image
+
+    path = os.path.join(out_dir, f"{map_name}_road_hierarchy.bmp")
+    if not os.path.exists(path):
+        return None
+    return np.asarray(Image.open(path).convert("L"))[:proj.height, :proj.width]
+
+
+def _road_weight(out_dir: str, map_name: str, proj,
+                 road_hierarchy: np.ndarray | None = None) -> np.ndarray | None:
     """2 on carriageway, 1 on pavement, 0 elsewhere, from the ground as the
     renderer drew it."""
     from PIL import Image
@@ -736,6 +761,11 @@ def _road_weight(out_dir: str, map_name: str, proj) -> np.ndarray | None:
         weight[np.all(ground == colour, axis=2)] = 1
     for colour in (C.MEDIUM_ASPHALT, C.DARKEST_ASPHALT, C.DARK_POTHOLE, C.LIGHT_POTHOLE):
         weight[np.all(ground == colour, axis=2)] = 2
+    if road_hierarchy is not None:
+        # The mask includes each road's sidewalk width. Larger road classes
+        # carry a stronger cost so footprints settle behind local streets.
+        classified = road_hierarchy[:proj.height, :proj.width]
+        weight[classified > 0] = classified[classified > 0]
     return weight
 
 
@@ -942,6 +972,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         print("projection does not match the rendered BMP - is this folder "
               "from a different Knoxify version?", file=sys.stderr)
         return 2
+    road_hierarchy = _load_road_hierarchy(out_dir, map_name, proj)
 
     # Where this map stands in the world, beside any other KnoxMap map on
     # this PC rather than on top of it (knoxbuild/world.py). Everything
@@ -1004,14 +1035,15 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     lots = np.zeros((proj.height, proj.width), dtype=bool)
     # Knox County roads: every building upright, and stood clear of the roads.
     straight = bool(settings.straight_roads or info.get("straight_roads"))
-    road_weight = _road_weight(out_dir, map_name, proj) if straight else None
+    road_weight = (_road_weight(out_dir, map_name, proj, road_hierarchy)
+                   if straight or road_hierarchy is not None else None)
 
     # Biggest footprints claim their tiles first. Where two real buildings
     # share a wall, one of them has to give up that row of tiles, and it should
     # not be the town hall giving way to the shed behind it.
     order = []
     jobs: list[tuple] = []       # what each building needs to lay itself out
-    street_side = _street_finder(out_dir, map_name)
+    street_side = _street_finder(out_dir, map_name, road_hierarchy)
     stations: list[tuple] = []   # petrol stations, for their pumps
     gunshops: set[str] = set()   # and the buildings OSM says sell weapons
     canopies: list[list] = []    # and the canopies over their forecourts
@@ -1080,7 +1112,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         kept, thinning = plan(cands, max_size)
         order = [(-c.area, c.index, c.px) for c in kept]
     metres_per_tile = info["meters_per_tile"]
-    context = Context(proj.width, proj.height, surroundings, metres_per_tile)
+    context = Context(proj.width, proj.height, surroundings, metres_per_tile,
+                      road_hierarchy=road_hierarchy)
 
     for placed_so_far, (_neg_area, i, px) in enumerate(order):
         # Between buildings: nothing is written to disk until the whole run
@@ -1338,7 +1371,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
 
     zones = _detect_zones(os.path.join(out_dir, f"{map_name}.bmp"),
                           placements, settings=settings, areas=areas, drives=drives,
-                          keep_clear=forecourts)
+                          keep_clear=forecourts, road_hierarchy=road_hierarchy)
     # Fences go into the project alongside the buildings, but not into the
     # town zones: a fence lot spans its whole cell and would mark it all town.
     from .structures import build_structures

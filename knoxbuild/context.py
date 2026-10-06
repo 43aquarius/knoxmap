@@ -5,7 +5,8 @@ describe say a lot about their neighbours: a street where every mapped block is
 six storeys tall is not lined with bungalows in between, and a quarter packed
 wall to wall with buildings is not the place for a log cabin. This looks at all
 the footprints at once, before any building is placed, so each untagged one
-can borrow what its neighbours make plain.
+can borrow what its neighbours make plain. The road hierarchy adds a smaller
+signal: a connected street grid is urban even before buildings fill the block.
 """
 from __future__ import annotations
 
@@ -42,7 +43,8 @@ NEIGHBOUR_SAMPLES = 4
 class Context:
     def __init__(self, width: int, height: int,
                  buildings: list[tuple[float, float, float, int | None]],
-                 metres_per_tile: float = 1.0):
+                 metres_per_tile: float = 1.0,
+                 road_hierarchy: np.ndarray | None = None):
         """`buildings` holds (centre x, centre y, area in tiles, storeys or None)."""
         self.cell = max(1.0, DENSITY_CELL_M / metres_per_tile)
         self.radius = NEIGHBOUR_RADIUS_M / metres_per_tile
@@ -60,6 +62,22 @@ class Context:
         sums = sum(padded[dy:dy + gh, dx:dx + gw] for dy in range(3) for dx in range(3))
         spans = sum(ground[dy:dy + gh, dx:dx + gw] for dy in range(3) for dx in range(3))
         self.coverage = np.clip(sums / (spans * self.cell * self.cell), 0, 1)
+        if road_hierarchy is not None:
+            road_urbanity = np.zeros(9, dtype=float)
+            road_urbanity[1:] = (0.08, 0.18, 0.58, 0.76, 0.86, 0.90, 0.72, 0.48)
+            road = np.asarray(road_hierarchy[:height, :width], dtype=np.uint8)
+            road = np.minimum(road, len(road_urbanity) - 1)
+            road_cells = np.zeros_like(covered)
+            for gy in range(gh):
+                y0, y1 = int(gy * self.cell), min(height, int((gy + 1) * self.cell))
+                for gx in range(gw):
+                    x0, x1 = int(gx * self.cell), min(width, int((gx + 1) * self.cell))
+                    if x1 > x0 and y1 > y0:
+                        road_cells[gy, gx] = road_urbanity[road[y0:y1, x0:x1]].mean()
+            road_padded = np.pad(road_cells, 1)
+            road_sums = sum(road_padded[dy:dy + gh, dx:dx + gw]
+                            for dy in range(3) for dx in range(3))
+            self.coverage = np.clip(self.coverage + 0.45 * road_sums / spans, 0, 1)
 
         tagged = [(x, y, lv) for x, y, _a, lv in buildings if lv is not None]
         self._tagged = np.array(tagged, dtype=float).reshape(-1, 3)

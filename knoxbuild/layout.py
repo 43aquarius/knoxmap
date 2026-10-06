@@ -1033,6 +1033,20 @@ UPSTAIRS = ["bedroom", "kidsbedroom", "bedroom", "laundry",
             "bedroom", "office", "storage"]
 
 
+def _house_room_budgets(plan: Plan, levels: int) -> tuple[int, int]:
+    footprint = (sum(sum(row) for row in plan.mask)
+                 if plan.mask is not None else plan.width * plan.height)
+    floor_area = footprint * max(1, levels)
+    bedrooms = min(5, max(1, (floor_area + 89) // 90))
+    bathrooms = 2 if floor_area >= 900 else 1
+    return bedrooms, bathrooms
+
+
+def _house_bedrooms_on_floor(bedrooms: int, levels: int, level: int) -> int:
+    each, remainder = divmod(bedrooms, max(1, levels))
+    return each + (level < remainder)
+
+
 # Where you walk when you are not in a room. Knox County's houses have a hall
 # in 42% of them and a living room in nearly all, and everything opens off one
 # or the other; ours had no circulation upstairs at all, so a floor of bedrooms
@@ -1080,7 +1094,11 @@ def _more_halls(plan: Plan, adj: dict, free: list, kinds: dict,
         left = [i for i in free if i not in covered]
         if not left:
             break
-        best = max(free, key=lambda i: len([n for n in adj.get(i, ()) if n in left]))
+        seed_set = set(seeds)
+        best = max(free, key=lambda i: (
+            len([n for n in adj.get(i, ()) if n in left]),
+            len(set(adj.get(i, ())) & seed_set),
+            plan.rooms[i - 1].area))
         if not any(n in left for n in adj.get(best, ())):
             break
         kinds[best] = "hall"
@@ -1112,6 +1130,11 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
         return
     area = {i: plan.rooms[i - 1].area for i in free}
     kinds: dict[int, str] = {}
+    bedroom_budget, bathroom_budget = _house_room_budgets(plan, levels)
+    bedroom_quota = _house_bedrooms_on_floor(bedroom_budget, levels, level)
+    bathroom_floors = {min(1, levels - 1)}
+    if bathroom_budget > 1:
+        bathroom_floors.add(0)
 
     def take(i: int, kind: str) -> None:
         kinds[i] = kind
@@ -1131,7 +1154,7 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
             # one in 93%.
             if near and len(free) >= 3 and rng.random() < DINING_ROOM_SHARE:
                 take(max(near, key=lambda i: area[i]), "dining")
-        if free and (levels == 1 or len(free) >= 2):
+        if free and level in bathroom_floors and (levels == 1 or len(free) >= 2):
             take(min(free, key=lambda i: area[i]), "bathroom")
         # A small room beside the kitchen is its laundry.
         near = [n for n in adj.get(kitchens[0], ()) if n in free
@@ -1144,9 +1167,17 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
                     len(free) // ROOMS_PER_HALL)
         dist = _graph_distance(adj, living)
         rest = sorted(free, key=lambda i: -dist.get(i, 99))
-        sleeping = HOUSE_SLEEPING if levels == 1 else ["office", "bedroom", "kidsbedroom"]
+        bedroom_count = min(bedroom_quota, len(rest))
+        kids_room = bedroom_count > 1 and rng.random() < 0.4
         for n, i in enumerate(rest):
-            kinds[i] = "closet" if area[i] <= SMALL_ROOM_TILES else sleeping[n % len(sleeping)]
+            if n < bedroom_count:
+                kinds[i] = "kidsbedroom" if kids_room and n == bedroom_count - 1 else "bedroom"
+            elif area[i] <= SMALL_ROOM_TILES:
+                kinds[i] = "closet"
+            elif n == bedroom_count:
+                kinds[i] = "office"
+            else:
+                kinds[i] = "storage"
     else:
         # The landing. Without one an upstairs was a row of bedrooms opening
         # into each other, which is what a plan should never ask you to walk
@@ -1158,10 +1189,22 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
         _more_halls(plan, adj, free, kinds,
                     [i for i, k in kinds.items() if k == "hall"],
                     len(free) // ROOMS_PER_HALL)
-        if free:
+        if free and level in bathroom_floors:
             take(min(free, key=lambda i: area[i]), "bathroom")
-        for n, i in enumerate(sorted(free, key=lambda i: -area[i])):
-            kinds[i] = "closet" if area[i] <= SMALL_ROOM_TILES else UPSTAIRS[n % len(UPSTAIRS)]
+        rest = sorted(free, key=lambda i: -area[i])
+        bedroom_count = min(bedroom_quota, len(rest))
+        kids_room = bedroom_count > 1 and rng.random() < 0.4
+        for n, i in enumerate(rest):
+            if n < bedroom_count:
+                kinds[i] = "kidsbedroom" if kids_room and n == bedroom_count - 1 else "bedroom"
+            elif area[i] <= SMALL_ROOM_TILES:
+                kinds[i] = "closet"
+            elif level == 1 and n == bedroom_count:
+                kinds[i] = "laundry"
+            elif n == bedroom_count:
+                kinds[i] = "office"
+            else:
+                kinds[i] = "storage"
 
     for i, kind in kinds.items():
         plan.rooms[i - 1].kind = kind
@@ -1499,13 +1542,29 @@ CORRIDOR_WORTH_IT = 8
 
 NEEDS_CORRIDOR = {"school", "police", "civic", "medical", "fire", "military",
                   "library", "offices"}
+MIN_SPECIAL_ROOMS = {
+    "school": {"classroom": 1, "diningroom": 1, "gym": 1, "library": 1},
+    "police": {"policeoffice": 1, "policelocker": 1},
+    "civic": {"office": 1, "lobby": 1},
+    "medical": {"clinic": 1, "medical": 1},
+    "fire": {"firegarage": 1},
+    "military": {"armystorage": 1},
+    "library": {"library": 1},
+    "offices": {"office": 1},
+}
 
 
 def _circulation(plan: Plan, rooms: list[Room]) -> int:
     """Rooms turned into halls until the rest all open onto one."""
     adj = _neighbours(plan)
     where = {id(r): i for i, r in enumerate(plan.rooms, 1)}
-    free = [where[id(r)] for r in rooms if (r.kind or "") not in CIRCULATION]
+    protected = set()
+    for kind, minimum in MIN_SPECIAL_ROOMS.get(plan.kind or "", {}).items():
+        matches = sorted((r for r in rooms if r.kind == kind),
+                         key=lambda r: -r.area)
+        protected.update(id(r) for r in matches[:minimum])
+    free = [where[id(r)] for r in rooms if (r.kind or "") not in CIRCULATION
+            and id(r) not in protected]
     seeds = [where[id(r)] for r in rooms if (r.kind or "") in CIRCULATION]
     kinds: dict[int, str] = {}
     made = _more_halls(plan, adj, free, kinds, seeds,
@@ -3221,6 +3280,17 @@ def _cells_for(role: str, x: int, y: int, orient: str) -> list[tuple[int, int]]:
     return out
 
 
+def _wall_anchor(role: str, x: int, y: int, orient: str,
+                 wall: str) -> tuple[int, int]:
+    """Anchor a multi-tile piece so its footprint ends at the named wall."""
+    cells = _cells_for(role, 0, 0, orient)
+    if wall == "E":
+        x -= max(cx for cx, _cy in cells)
+    elif wall == "S":
+        y -= max(cy for _cx, cy in cells)
+    return x, y
+
+
 SWITCH = "switch"
 # One light switch per this much floor, in tiles, and never more than this
 # many in a room. A room of a hundred tiles keeps its single switch; a
@@ -3529,6 +3599,49 @@ def _place_group(plan: Plan, idx: int, room: Room,
     return placed
 
 
+def _bathroom_wishlist(area: int, public: bool) -> list[str]:
+    if public:
+        basins = max(1, min(3, area // 12))
+        return [role for _ in range(basins) for role in ("toilet", "sink_public")] \
+            + ["mirror"]
+    fixtures = ["toilet", "sink", "mirror"]
+    if area >= 14:
+        fixtures.extend(("bath", "bath_mat"))
+    else:
+        fixtures.append("shower")
+    if area >= 18:
+        fixtures.append("shelf")
+    return fixtures
+
+
+def _bath_mat_spot(plan: Plan, idx: int, room: Room,
+                   occupied: set[tuple[int, int]], keep_clear: set[tuple[int, int]]):
+    tub = next(((x, y, orient) for role, x, y, orient in plan.furniture
+                if role == "bath" and _room_at(plan, x, y) == idx), None)
+    if tub is None:
+        return None
+    tx, ty, orient = tub
+    tub_cells = _cells_for("bath", tx, ty, orient)
+    center_x, center_y = (room.x0 + room.x1) / 2, (room.y0 + room.y1) / 2
+    candidates = []
+    for x, y in tub_cells:
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            ax, ay = x + dx, y + dy
+            for mat_orient in C.FURNITURE["bath_mat"]:
+                cells = _cells_for("bath_mat", ax, ay, mat_orient)
+                if any(_room_at(plan, cx, cy) != idx or (cx, cy) in occupied
+                       or (cx, cy) in keep_clear for cx, cy in cells):
+                    continue
+                mat_x = sum(cx for cx, _cy in cells) / len(cells)
+                mat_y = sum(cy for _cx, cy in cells) / len(cells)
+                distance = abs(mat_x - center_x) + abs(mat_y - center_y)
+                candidates.append((distance, ay, ax, mat_orient, cells))
+    if not candidates:
+        return None
+    _distance, ay, ax, mat_orient, cells = min(candidates)
+    return ax, ay, mat_orient, cells
+
+
 def _furnish(plan: Plan, rng: random.Random,
              stairs: tuple[int, int, str] | None = None,
              street: str | None = None) -> None:
@@ -3720,15 +3833,9 @@ def _furnish(plan: Plan, rng: random.Random,
                                             door_tiles, street)
         elif commercial_kitchen:
             base = interiors.KITCHEN_KIT.get(r.kind, interiors.DEFAULT_KITCHEN_KIT)
-        elif r.kind == "bathroom" and plan.kind not in HOUSE_LIKE_KINDS | {"apartment"}:
-            # A shop's or an office's lavatory, not a family bathroom with a
-            # bath. The game gives both the same room name, so the basin is
-            # what tells them apart: a household bathroom has
-            # fixtures_sinks_01_0-3 at 1.03 a room and a public one at 0.08,
-            # and the public one has sink_public instead. Two cubicles and a
-            # row of basins, no bath.
-            base = ["toilet", "sink_public", "toilet", "sink_public",
-                    "mirror"]
+        elif r.kind == "bathroom":
+            public = plan.kind not in HOUSE_LIKE_KINDS | {"apartment"}
+            base = _bathroom_wishlist(r.area, public)
         elif plan.kind in CIVIC_KINDS and r.kind in CIVIC_ROOMS:
             # A police station's corridor is not somebody's hallway. The
             # wishlist for hall and lobby is a domestic one - side table,
@@ -3784,7 +3891,7 @@ def _furnish(plan: Plan, rng: random.Random,
         if plan.profile:
             per = max(1, round(per * (1.18 - 0.36 * plan.profile.clutter)))
         target = max(len(base), min(40, r.area // per))
-        if eatery or commercial_kitchen or r.kind == "theatre":
+        if eatery or commercial_kitchen or r.kind in {"bathroom", "theatre"}:
             target = len(base)       # fitted out; nothing more to scatter
         wishlist = []
         art_chance = WALL_ART_CHANCE
@@ -3850,9 +3957,59 @@ def _furnish(plan: Plan, rng: random.Random,
                 wishlist.remove(bed)
                 if "sidetable" in wishlist:
                     wishlist.remove("sidetable")
-        floor_slots = [s for s in slots]
-        rng.shuffle(floor_slots)
+        plumbing_rooms = KITCHENS | {"kitchen", "bathroom", "laundry"}
+        side_scores = {side: [0, 0, 0] for side in step}
+        for x, y, facing in slots:
+            dx, dy = step[facing]
+            neighbor = _room_at(plan, x + dx, y + dy)
+            linked_plumbing = (neighbor and neighbor != idx
+                               and r.kind in plumbing_rooms
+                               and plan.rooms[neighbor - 1].kind in plumbing_rooms)
+            side_scores[facing][0] += int(bool(linked_plumbing))
+            side_scores[facing][1] += int(not on_facade((x, y, facing)))
+            side_scores[facing][2] += 1
+        side_order = sorted(step, key=lambda side: (
+            -side_scores[side][0], -side_scores[side][1], -side_scores[side][2], side))
+        side_rank = {side: rank for rank, side in enumerate(side_order)}
+        door_frontier = [(x, y) for x, y in door_tiles
+                         if _room_at(plan, x, y) == idx]
+
+        def slot_order(slot):
+            x, y, facing = slot
+            distance = min((abs(x - dx) + abs(y - dy) for dx, dy in door_frontier),
+                           default=0)
+            return side_rank[facing], -distance, y, x
+
+        floor_slots = sorted(slots, key=slot_order)
         for role in wishlist:
+            if role == "bath_mat":
+                mat = _bath_mat_spot(plan, idx, r, occupied, keep_clear)
+                if mat is not None:
+                    mx, my, mat_orient, mat_cells = mat
+                    plan.furniture.append((role, mx, my, mat_orient))
+                    occupied.update(mat_cells)
+                continue
+            if role == "mirror" and r.kind == "bathroom":
+                basin = next(((x, y, orient) for basin_role, x, y, orient
+                              in plan.furniture
+                              if _is_sink(basin_role) and _room_at(plan, x, y) == idx),
+                             None)
+                if basin is not None:
+                    bx, by, facing = basin
+                    near_basin = sorted(
+                        (slot for slot in slots if slot[2] == facing),
+                        key=lambda slot: abs(slot[0] - bx) + abs(slot[1] - by))
+                    mirror_placed = False
+                    for slot in near_basin:
+                        if not hang("mirror", *slot):
+                            continue
+                        mirror_orient = _facing("mirror", slot[2])
+                        occupied.update(_cells_for("mirror", slot[0], slot[1],
+                                                   mirror_orient))
+                        mirror_placed = True
+                        break
+                    if mirror_placed:
+                        continue
             if _is_wall_piece(role):
                 for x, y, facing in sorted(floor_slots, key=on_facade):
                     if hang(role, x, y, facing):
@@ -3862,7 +4019,8 @@ def _furnish(plan: Plan, rng: random.Random,
                 if role in NORTH_WEST_ONLY and wanted in ("S", "E"):
                     continue
                 orient = _facing(role, wanted)
-                cells = _cells_for(role, x, y, orient)
+                ax, ay = _wall_anchor(role, x, y, orient, wanted)
+                cells = _cells_for(role, ax, ay, orient)
                 if any(c in occupied or c in door_tiles for c in cells):
                     continue
                 if any(_room_at(plan, cx, cy) != idx for cx, cy in cells):
@@ -3877,7 +4035,7 @@ def _furnish(plan: Plan, rng: random.Random,
                         continue
                 occupied.update(cells)
                 occupied.update(front)
-                plan.furniture.append((role, x, y, orient))
+                plan.furniture.append((role, ax, ay, orient))
                 break
 
         if commercial_kitchen:
@@ -3905,7 +4063,7 @@ SURFACE_ROLES = {"kitchen_sink", "sink", "lamp", "tv", "register"}
 
 
 def _is_sink(role: str) -> bool:
-    return role.startswith(("sink", "kitchen_sink"))
+    return role != "sink_public" and role.startswith(("sink", "kitchen_sink"))
 WORKTOP_ROOMS = ({"kitchen", "bathroom", "laundry", "breakroom", "openplan"}
                  | KITCHENS)
 # Opened from the front: the tile before them is kept clear.
@@ -4108,15 +4266,16 @@ def _counter_runs(plan: Plan, idx: int, slots, occupied: set,
             if len(placed) >= left:
                 break
             orient = _facing(counter, facing)
-            cells = _cells_for(counter, x, y, orient)
+            ax, ay = _wall_anchor(counter, x, y, orient, facing)
+            cells = _cells_for(counter, ax, ay, orient)
             if any(c in occupied or c in door_tiles or c in stair_tiles for c in cells):
                 continue
             if any(_room_at(plan, cx, cy) != idx for cx, cy in cells):
                 continue
             # A corner tile is on two walls; one counter is enough.
             occupied.update(cells)
-            plan.furniture.append((counter, x, y, orient))
-            placed.append((x, y, orient))
+            plan.furniture.append((counter, ax, ay, orient))
+            placed.append((ax, ay, orient))
 
     # Cupboards on the wall above the counters, and sometimes a microwave on
     # one. North and west walls only, as for everything fixed to a wall; the
@@ -4493,8 +4652,21 @@ def _open_up(storey: "Plan", starts: set) -> set:
             continue
         if cost < want.get(idx, (MANY, None))[0]:
             want[idx] = (cost, (x, y))
+    goals = [tile for _cost, tile in want.values()]
+
+    # A room is not walkable just because one corner can be reached. Keep all
+    # remaining floor connected, and keep the floor on both sides of doors
+    # and beside windows reachable for interaction.
+    targets = {(x, y) for y in range(h) for x in range(w)
+               if grid[y][x] and (x, y) not in at}
+    for x, y, facing in doors | set(storey.windows):
+        sides = ((x - 1, y), (x, y)) if facing == "W" else ((x, y - 1), (x, y))
+        targets.update((tx, ty) for tx, ty in sides
+                       if 0 <= tx < w and 0 <= ty < h and grid[ty][tx])
+    goals.extend(tile for tile in targets if best.get(tile, MANY) > 0)
+
     gone: set = set()
-    for _cost, tile in want.values():
+    for tile in goals:
         while tile is not None:
             gone |= at.get(tile, set())
             tile = back.get(tile)
