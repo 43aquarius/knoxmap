@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.5.2
 
 - **Big maps no longer fail Generate buildings with "exceeds limit of 178956970
   pixels, could be decompression bomb DOS attack"** (`generator/__init__.py`,
