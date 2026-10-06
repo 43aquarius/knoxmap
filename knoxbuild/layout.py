@@ -525,6 +525,9 @@ SPECIAL_MIXES = {
 # region per house floor gives up a corner to a bathroom-sized room first.
 # MIN_ROOM is 3, so 9 to 12 tiles is as near the game's as squares allow.
 SMALL_ROOM_RUN = (MIN_ROOM, MIN_ROOM + 1)
+# The bottom of that band, and so the smallest household bathroom that is
+# fitted out with a bath rather than a shower (_bathroom_wishlist).
+BATHROOM_TILES = MIN_ROOM * MIN_ROOM
 
 
 def _inside(x0: int, y0: int, x1: int, y1: int,
@@ -1029,6 +1032,13 @@ SMALL_ROOM_TILES = 10
 # A separate dining room, in Knox County, is in 13% of houses.
 DINING_ROOM_SHARE = 0.13
 HOUSE_SLEEPING = ["bedroom", "kidsbedroom", "bedroom", "storage"]
+# What is left of a floor once its bedrooms, its bathroom and its one office
+# are dealt out. Everything past them used to become storage, which turned a
+# fourteen-room house into five bedrooms and nine store cupboards - 2747
+# storerooms in 200 houses against 321 before, and storage the commonest room
+# in a house by three times over. These are the rooms a house has more than
+# one of, and they are dealt round in turn.
+HOUSE_SPARE = ["storage", "laundry", "office", "storage", "closet", "office"]
 UPSTAIRS = ["bedroom", "kidsbedroom", "bedroom", "laundry",
             "bedroom", "office", "storage"]
 
@@ -1177,7 +1187,7 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
             elif n == bedroom_count:
                 kinds[i] = "office"
             else:
-                kinds[i] = "storage"
+                kinds[i] = HOUSE_SPARE[(n - bedroom_count - 1) % len(HOUSE_SPARE)]
     else:
         # The landing. Without one an upstairs was a row of bedrooms opening
         # into each other, which is what a plan should never ask you to walk
@@ -1204,7 +1214,7 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
             elif n == bedroom_count:
                 kinds[i] = "office"
             else:
-                kinds[i] = "storage"
+                kinds[i] = HOUSE_SPARE[(n - bedroom_count - 1) % len(HOUSE_SPARE)]
 
     for i, kind in kinds.items():
         plan.rooms[i - 1].kind = kind
@@ -3604,11 +3614,23 @@ def _bathroom_wishlist(area: int, public: bool) -> list[str]:
         basins = max(1, min(3, area // 12))
         return [role for _ in range(basins) for role in ("toilet", "sink_public")] \
             + ["mirror"]
-    fixtures = ["toilet", "sink", "mirror"]
-    if area >= 14:
-        fixtures.extend(("bath", "bath_mat"))
-    else:
-        fixtures.append("shower")
+    # Biggest fixture first. The tub and the cubicle are two tiles against
+    # everything else's one, and with the slots now dealt out in a fixed order
+    # rather than shuffled, a toilet and a basin taking the plumbing wall first
+    # left no run of two anywhere and 86 of 227 bathrooms got neither - the
+    # mat follows the tub it is laid beside, and the mirror the basin it hangs
+    # over, so both of those still come after their own fixture.
+    fixtures = ["bath" if area >= BATHROOM_TILES else "shower",
+                "toilet", "sink", "mirror"]
+    # A tub is two tiles and its mat two more, which a bathroom the size this
+    # generator aims for takes without trouble: the band above is 9 to 12
+    # tiles, matching Knox County's 6.5 m2, and a Knox County bathroom has a
+    # bath in it. Asking for 14 asked for more than the generator ever cuts -
+    # 1.5% of them - so every bathroom got the shower instead and 378 baths in
+    # 200 houses became none. Below the band, in a flat's or a motel's
+    # bathroom, there is only room for the shower.
+    if area >= BATHROOM_TILES:
+        fixtures.append("bath_mat")
     if area >= 18:
         fixtures.append("shelf")
     return fixtures
@@ -4596,6 +4618,20 @@ def _ways_in(building: "Building", level: int, storey: "Plan") -> set:
     return out
 
 
+# Bare floor you cannot step onto that is allowed to stay shut off: a corner
+# behind a bed or at the end of a bath, rather than a part of the room.
+POCKET_TILES = 2
+# What may stand on the square at a window. The pass below clears that square
+# so the window can be opened, climbed through and seen out of, which is right
+# for a bookcase or a wardrobe and wrong for these: a bath under the bathroom
+# window and a bed under the bedroom one are what Knox County does, and taking
+# them out cost 78 baths and 247 beds in 200 houses.
+def _under_a_window(role: str) -> bool:
+    return (role in {"bath", "bath_mat", "sofa", "table", "coffee_table",
+                     "sidetable", "desk", "bench"}
+            or role.startswith(("bed", "double_bed", "sofa_", "counter")))
+
+
 def _open_up(storey: "Plan", starts: set) -> set:
     """Which pieces have to go for every room to be walked into."""
     w, h, grid = storey.width, storey.height, storey.grid
@@ -4654,16 +4690,42 @@ def _open_up(storey: "Plan", starts: set) -> set:
             want[idx] = (cost, (x, y))
     goals = [tile for _cost, tile in want.values()]
 
-    # A room is not walkable just because one corner can be reached. Keep all
-    # remaining floor connected, and keep the floor on both sides of doors
-    # and beside windows reachable for interaction.
-    targets = {(x, y) for y in range(h) for x in range(w)
-               if grid[y][x] and (x, y) not in at}
+    # A room is not walkable just because one corner of it can be reached: the
+    # floor you are left standing on should hang together, and both sides of a
+    # door and the square at a window have to be reachable or they cannot be
+    # used. A tile or two you cannot step onto, though - behind the bed, beside
+    # the bath - is how a furnished room works, and insisting on every bare
+    # square took out 78 baths and 247 beds in 200 houses, three times what
+    # this pass used to clear. Only a pocket bigger than that is opened up.
     for x, y, facing in doors | set(storey.windows):
         sides = ((x - 1, y), (x, y)) if facing == "W" else ((x, y - 1), (x, y))
-        targets.update((tx, ty) for tx, ty in sides
-                       if 0 <= tx < w and 0 <= ty < h and grid[ty][tx])
-    goals.extend(tile for tile in targets if best.get(tile, MANY) > 0)
+        for tx, ty in sides:
+            if not (0 <= tx < w and 0 <= ty < h) or not grid[ty][tx]:
+                continue
+            if best.get((tx, ty), MANY) == 0:
+                continue
+            if (x, y, facing) not in doors and all(
+                    _under_a_window(storey.furniture[n][0])
+                    for n in at.get((tx, ty), ())):
+                continue
+            goals.append((tx, ty))
+    shut = {(x, y) for y in range(h) for x in range(w)
+            if grid[y][x] and (x, y) not in at and best.get((x, y), MANY) > 0}
+    seen: set = set()
+    for tile in shut:
+        if tile in seen:
+            continue
+        seen.add(tile)
+        pocket, edge = [], deque([tile])
+        while edge:
+            cx, cy = edge.popleft()
+            pocket.append((cx, cy))
+            for nxt in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                if nxt in shut and nxt not in seen and step(cx, cy, *nxt):
+                    seen.add(nxt)
+                    edge.append(nxt)
+        if len(pocket) > POCKET_TILES:
+            goals.append(min(pocket, key=lambda t: best.get(t, MANY)))
 
     gone: set = set()
     for tile in goals:

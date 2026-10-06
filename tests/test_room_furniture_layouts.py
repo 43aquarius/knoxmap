@@ -6,11 +6,35 @@ from knoxbuild import layout
 
 
 class RoomFurnitureLayouts(unittest.TestCase):
+    def setUp(self):
+        # The game's own art only, whatever is installed on the machine running
+        # the tests: with Erika's Tiles present a bathroom mirror is swapped for
+        # one of the mod's prints, so these pass on a bare PC and fail on a
+        # player's.
+        self._erika = list(layout._ERIKA_ALLOWED)
+        layout.use_mod_tiles(False)
+
+    def tearDown(self):
+        layout._ERIKA_ALLOWED[:] = self._erika
+        layout._ERIKA.clear()
+
     def test_bathroom_fixture_plan_does_not_mix_bath_and_shower(self):
-        self.assertEqual(layout._bathroom_wishlist(9, public=False),
-                         ["toilet", "sink", "mirror", "shower"])
-        self.assertEqual(layout._bathroom_wishlist(18, public=False),
-                         ["toilet", "sink", "mirror", "bath", "bath_mat", "shelf"])
+        # A bathroom the size this generator cuts gets a bath; one smaller than
+        # it ever cuts for a house - a flat's or a motel's - gets the shower.
+        # Either way, never both: the room is 6.5 m2.
+        cramped = layout._bathroom_wishlist(layout.BATHROOM_TILES - 1, public=False)
+        self.assertIn("shower", cramped)
+        self.assertNotIn("bath", cramped)
+        for area in (layout.BATHROOM_TILES, 18):
+            with self.subTest(area=area):
+                fitted = layout._bathroom_wishlist(area, public=False)
+                self.assertIn("bath", fitted)
+                self.assertIn("bath_mat", fitted)
+                self.assertNotIn("shower", fitted)
+                # Two tiles of tub, placed before the one-tile fixtures take
+                # the wall it needs.
+                self.assertEqual(fitted[0], "bath")
+                self.assertLess(fitted.index("sink"), fitted.index("bath_mat"))
 
     def test_public_bathroom_fixtures_scale_with_room_area(self):
         small = layout._bathroom_wishlist(9, public=True)
@@ -40,9 +64,9 @@ class RoomFurnitureLayouts(unittest.TestCase):
         fixtures = [("sink" if layout._is_sink(role) else role, orient)
                 for role, _x, _y, orient in plan.furniture
                     if layout._room_at(plan, _x, _y) == 1
-                    and (role in {"toilet", "shower"} or layout._is_sink(role))]
+                    and (role in {"toilet", "bath"} or layout._is_sink(role))]
         self.assertEqual({role for role, _orient in fixtures},
-                         {"toilet", "sink", "shower"})
+                         {"toilet", "sink", "bath"})
         fixture_orient = dict(fixtures)
         self.assertEqual(fixture_orient["toilet"], "N")
         self.assertEqual(fixture_orient["sink"], "N")
