@@ -29,6 +29,7 @@ from generator.renderer import Projector
 import knoxstop
 
 from .areas import AreaIndex
+from .bitmaps import read_gray, read_rgb, same_colour
 from .fences import build_fences
 from .footprint import place
 from .layout import build_building
@@ -703,10 +704,10 @@ def _street_finder(out_dir: str, map_name: str,
         path = os.path.join(out_dir, f"{map_name}.bmp")
     if not os.path.exists(path):
         return lambda *a: None
-    g = np.array(Image.open(path).convert("RGB"))
+    g = read_rgb(path)
     paved = np.zeros(g.shape[:2], dtype=bool)
     for c in (PC.PALE_CONCRETE, PC.MEDIUM_ASPHALT, PC.DARKEST_ASPHALT):
-        paved |= np.all(g == c, axis=2)
+        paved |= same_colour(g, c)
     H, W = paved.shape
 
     def side(x0: int, y0: int, w: int, h: int) -> str | None:
@@ -739,7 +740,7 @@ def _load_road_hierarchy(out_dir: str, map_name: str, proj) -> np.ndarray | None
     path = os.path.join(out_dir, f"{map_name}_road_hierarchy.bmp")
     if not os.path.exists(path):
         return None
-    return np.asarray(Image.open(path).convert("L"))[:proj.height, :proj.width]
+    return read_gray(path, crop=(proj.height, proj.width))
 
 
 def _road_weight(out_dir: str, map_name: str, proj,
@@ -755,12 +756,12 @@ def _road_weight(out_dir: str, map_name: str, proj,
         path = os.path.join(out_dir, f"{map_name}.bmp")
     if not os.path.exists(path):
         return None
-    ground = np.array(Image.open(path).convert("RGB"))[:proj.height, :proj.width]
+    ground = read_rgb(path, crop=(proj.height, proj.width))
     weight = np.zeros(ground.shape[:2], dtype=np.int8)
     for colour in (C.PALE_CONCRETE,):
-        weight[np.all(ground == colour, axis=2)] = 1
+        weight[same_colour(ground, colour)] = 1
     for colour in (C.MEDIUM_ASPHALT, C.DARKEST_ASPHALT, C.DARK_POTHOLE, C.LIGHT_POTHOLE):
-        weight[np.all(ground == colour, axis=2)] = 2
+        weight[same_colour(ground, colour)] = 2
     if road_hierarchy is not None:
         # The mask includes each road's sidewalk width. Larger road classes
         # carry a stronger cost so footprints settle behind local streets.
@@ -1349,33 +1350,48 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                                                areas, metres_per_tile,
                                                seed=seed + 5)
 
-    fence_placements, fence_tiles = build_fences(out_dir, map_name, proj,
-                                                 occupied, areas, bdir,
-                                                 extra=yard_fences)
-
-    # The zombie spawn map, redrawn from the people in the buildings just
-    # placed. It replaces the ground-colour one the renderer wrote, at the
-    # same path and size, so the WorldEd project picks it up unchanged.
-    spawn_img, population = build_spawn_map(
-        peopled, proj.width, proj.height, info["meters_per_tile"],
-        os.path.join(out_dir, f"{map_name}.bmp"), settings)
-    spawn_img.save(os.path.join(out_dir, f"{map_name}_ZombieSpawnMap.bmp"), format="BMP")
-    save_footprints(os.path.join(out_dir, f"{map_name}_footprints.npz"), peopled)
-    population["official"] = [p for p in official_population(out_dir, map_name)
-                              if p.get("inside")][:5]
-    with open(os.path.join(out_dir, f"{map_name}_population.json"), "w",
-              encoding="utf-8") as f:
-        json.dump(population, f, indent=2, ensure_ascii=False)
-
-    paper_map = worldmap.write(out_dir, map_name, proj, info, outlines)
-
-    zones = _detect_zones(os.path.join(out_dir, f"{map_name}.bmp"),
-                          placements, settings=settings, areas=areas, drives=drives,
-                          keep_clear=forecourts, road_hierarchy=road_hierarchy)
-    # Fences go into the project alongside the buildings, but not into the
-    # town zones: a fence lot spans its whole cell and would mark it all town.
+    # Five jobs that each read the finished ground and none of which changes
+    # it or what another one reads: fences, the zombie spawn map, the paper
+    # map, the parking/town zones and the bridges. Mostly numpy and shapely,
+    # which let go of the interpreter lock, so threads overlap them.
+    from concurrent.futures import ThreadPoolExecutor
     from .structures import build_structures
-    structure_placements, raised = build_structures(out_dir, map_name, bdir)
+
+    def make_spawn_map():
+        # Redrawn from the people in the buildings just placed. It replaces the
+        # ground-colour one the renderer wrote, at the same path and size, so
+        # the WorldEd project picks it up unchanged.
+        spawn_img, pop = build_spawn_map(
+            peopled, proj.width, proj.height, info["meters_per_tile"],
+            os.path.join(out_dir, f"{map_name}.bmp"), settings)
+        spawn_img.save(os.path.join(out_dir, f"{map_name}_ZombieSpawnMap.bmp"),
+                       format="BMP")
+        save_footprints(os.path.join(out_dir, f"{map_name}_footprints.npz"), peopled)
+        pop["official"] = [p for p in official_population(out_dir, map_name)
+                           if p.get("inside")][:5]
+        with open(os.path.join(out_dir, f"{map_name}_population.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(pop, f, indent=2, ensure_ascii=False)
+        return pop
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        job_fences = pool.submit(build_fences, out_dir, map_name, proj, occupied,
+                                 areas, bdir, extra=yard_fences)
+        job_spawn = pool.submit(make_spawn_map)
+        job_paper = pool.submit(worldmap.write, out_dir, map_name, proj, info,
+                                outlines)
+        job_zones = pool.submit(
+            _detect_zones, os.path.join(out_dir, f"{map_name}.bmp"), placements,
+            settings=settings, areas=areas, drives=drives, keep_clear=forecourts,
+            road_hierarchy=road_hierarchy)
+        # Fences go into the project alongside the buildings, but not into the
+        # town zones: a fence lot spans its whole cell and would mark it all town.
+        job_structures = pool.submit(build_structures, out_dir, map_name, bdir)
+        fence_placements, fence_tiles = job_fences.result()
+        population = job_spawn.result()
+        paper_map = job_paper.result()
+        zones = job_zones.result()
+        structure_placements, raised = job_structures.result()
     placements = (placements + fence_placements + structure_placements +
                   pump_placements + prop_placements + light_placements
                   + escalator_placements)

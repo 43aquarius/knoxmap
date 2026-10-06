@@ -2253,6 +2253,47 @@ def check_no_size_wall(check, work: str) -> None:
           "and the numbers behind the warnings are still there to warn with")
 
 
+def check_big_bitmaps(check, work: str) -> None:
+    """A map past Pillow's 179 Mpx bomb guard still opens, and the strip reader
+    gives back exactly what Pillow does, at any width (BMP rows are padded)."""
+    import numpy as np
+
+    import generator  # noqa: F401 - lifts the pixel limit
+    import knoxbuild  # noqa: F401
+    from knoxbuild import bitmaps
+
+    # 20000 x 20000 is 400 Mpx, twice the limit where Pillow stops warning and
+    # starts refusing; 1-bit keeps the file at 50 MB.
+    big = os.path.join(work, "big.bmp")
+    Image.new("1", (20000, 20000)).save(big, format="BMP")
+    try:
+        with Image.open(big) as img:
+            check(img.size == (20000, 20000),
+                  "a bitmap past Pillow's decompression-bomb limit still opens")
+    except Image.DecompressionBombError:
+        check(False, "a bitmap past Pillow's decompression-bomb limit still opens")
+    os.remove(big)
+
+    rng = np.random.default_rng(5)
+    same = True
+    for w, h in ((1, 1), (5, 3), (7, 600), (301, 257)):      # widths off a 4-byte row
+        rgb = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+        path = os.path.join(work, f"rgb_{w}x{h}.bmp")
+        Image.fromarray(rgb).save(path, format="BMP")
+        same &= np.array_equal(bitmaps.read_rgb(path), rgb)
+        crop = (max(1, h // 2), max(1, w // 2))
+        same &= np.array_equal(bitmaps.read_rgb(path, crop=crop), rgb[:crop[0], :crop[1]])
+        grey = rng.integers(0, 256, (h, w), dtype=np.uint8)
+        gpath = os.path.join(work, f"grey_{w}x{h}.bmp")
+        Image.fromarray(grey, "L").save(gpath, format="BMP")
+        same &= np.array_equal(bitmaps.read_gray(gpath), grey)
+        colour = tuple(int(v) for v in rgb[0, 0])
+        same &= np.array_equal(bitmaps.same_colour(rgb, colour),
+                               np.all(rgb == colour, axis=2))
+    check(bool(same), "the strip reader returns the same pixels as Pillow, "
+                      "whole or cropped, in colour and grey")
+
+
 def check_box_any(check) -> None:
     """The reach test the gardens use works a strip at a time, to keep a town's
     summed-area table out of memory; it must still answer the same."""
@@ -2869,6 +2910,7 @@ def main(argv: list[str]) -> int:
         check_flat_selection(check)
         check_memory_guard(check)
         check_box_any(check)
+        check_big_bitmaps(check, work)
 
         print("error log")
         import zipfile

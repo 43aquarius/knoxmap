@@ -11,8 +11,11 @@
 // no is worth having only when the thing behind it cannot be done, and a big
 // map can be done - it costs memory and patience, which are the mapper's to
 // spend.
-const BIG_AREA_KM2 = 400.0;
-const BIG_TILES_PER_SIDE = 9000;
+const BIG_AREA_KM2 = 1000.0;
+const BIG_TILES_PER_SIDE = 20000;
+// Peak memory of Generate buildings, as in BUILD_BYTES_PER_TILE in app.py.
+const BUILD_BYTES_PER_TILE = 24;
+const BUILD_BASE_BYTES = 300e6;
 const BIG_LANDMARK_KM2 = 40.0;
 const OVERPASS_TILE_KM2 = 30.0;
 const SLOW_ABOVE_KM2 = 60.0;
@@ -251,7 +254,9 @@ function updateBboxFields() {
              + 'tile is the cheapest fix: 2 m is a quarter of the memory of 1 m.');
   }
   const slow = !heavy.length && area > SLOW_ABOVE_KM2;
+  const fitScale = heavy.length ? scaleThatFits(widthM, heightM, mpt) : null;
   const bitmap = bitmapFor(tilesX, tilesY);
+  const buildGB = ((tilesX * tilesY * BUILD_BYTES_PER_TILE + BUILD_BASE_BYTES) / 1e9).toFixed(1);
   const fill = Math.min(100, (area / BIG_AREA_KM2) * 100);
 
   stats.className = heavy.length ? 'warn' : (slow ? 'warn' : 'ok');
@@ -264,7 +269,7 @@ function updateBboxFields() {
       ${fx.tile(queries, '', queries === 1 ? 'osm query' : 'osm queries')}
     </div>
     <div class="meter">
-      <div class="meter-top"><span>~${Math.round(widthM)} × ${Math.round(heightM)} m · ${bitmap} of bitmap</span>
+      <div class="meter-top"><span>~${Math.round(widthM)} × ${Math.round(heightM)} m · ${bitmap} of bitmap · ~${buildGB} GB to add buildings</span>
         <span>${fill < 1 ? '<1' : Math.round(fill)}% of limit</span></div>
       <div class="bar"><div class="bar-fill" style="width:${fill}%"></div></div>
     </div>
@@ -272,7 +277,9 @@ function updateBboxFields() {
       <b>${selectionAreaKm2().toFixed(2)} km²</b> of this ${area.toFixed(2)} km² box. Outside it the land
       turns back to countryside, with the main roads and rivers running on.</div>` : ''}
     ${heavy.length ? `<div class="stat-note warn">${heavy.join(' ')}
-      You can still build it — this is a heads-up, not a wall.</div>` : ''}
+      You can still build it — this is a heads-up, not a wall.
+      ${fitScale ? `<button type="button" class="use-scale" data-scale="${fitScale.mpt}">Use ${fitScale.mpt} m/tile
+        (${fitScale.side} tiles a side, ${fitScale.bitmap})</button>` : ''}</div>` : ''}
     ${slow ? `<div class="stat-note warn">A big map — roughly ${Math.ceil(queries * 12 / 60)}+ min
       of OpenStreetMap queries before rendering starts.</div>` : ''}
   `;
@@ -324,6 +331,29 @@ function fixScaleField() {
 
 document.getElementById('metersPerTile').addEventListener('input', updateBboxFields);
 document.getElementById('metersPerTile').addEventListener('change', fixScaleField);
+
+// The smallest whole metres-per-tile, no finer than the one in use, at which
+// the map is back inside the tiles-a-side warning and its bitmaps (3 bytes a
+// tile, twice over) come to under 1.5 GB. Null when the scale
+// is already as coarse as the window allows or nothing in range fits.
+function scaleThatFits(widthM, heightM, current) {
+  const MAX_BITMAP_MB = 1500;
+  for (let s = Math.max(1, Math.floor(current) + 1); s <= 100; s++) {
+    const tx = Math.ceil(widthM / s / 300) * 300;
+    const ty = Math.ceil(heightM / s / 300) * 300;
+    if (Math.max(tx, ty) <= BIG_TILES_PER_SIDE && tx * ty * 6 / 1e6 <= MAX_BITMAP_MB) {
+      return { mpt: s, side: Math.max(tx, ty), bitmap: bitmapFor(tx, ty) };
+    }
+  }
+  return null;
+}
+
+document.getElementById('area-stats').addEventListener('click', ev => {
+  const btn = ev.target.closest('.use-scale');
+  if (!btn) return;
+  document.getElementById('metersPerTile').value = btn.dataset.scale;
+  fixScaleField();
+});
 
 // Landscape and vegetation, 3 bytes a tile each, held at full size while the
 // map is drawn. It is the number that decides whether a big map finishes.

@@ -124,13 +124,13 @@ def _grid_path(points: list[tuple[float, float]]) -> list[tuple[int, int]]:
 def _tarmac_mask(bmp_path: str, width: int, height: int):
     """True where the ground is a road, service lane or car park."""
     import numpy as np
-    from PIL import Image
-
     from generator import pz_colors as C
+
+    from .bitmaps import read_rgb
 
     if not os.path.exists(bmp_path):
         return None
-    ground = np.asarray(Image.open(bmp_path).convert("RGB"))
+    ground = read_rgb(bmp_path)
     if ground.shape[:2] != (height, width):
         return None
     mask = np.zeros((height, width), dtype=bool)

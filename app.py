@@ -278,11 +278,11 @@ def _only_local():
 # mapper's to spend.
 #
 # BIG_TILES_PER_SIDE is the memory one: the renderer holds a landscape and a
-# vegetation image at full size, 3 bytes a tile each, so 9000 tiles a side is
-# about 490 MB of pixels before anything else.
-BIG_AREA_KM2 = 400.0
+# vegetation image at full size, 3 bytes a tile each, so 20000 tiles a side is
+# about 2.4 GB of pixels before anything else.
+BIG_AREA_KM2 = 1000.0
 OVERPASS_TILE_KM2 = 30.0       # size of each sub-query; overshoot re-splits
-BIG_TILES_PER_SIDE = 9000      # 30 cells at 300 tiles each
+BIG_TILES_PER_SIDE = 20000     # 66 cells at 300 tiles each
 # A scale still has to be a scale: zero or a negative divides the world by
 # nothing. The range the window offers is 0.5 to 8; outside it is allowed and
 # said to be unusual.
@@ -687,9 +687,17 @@ def _normalise_bbox(south: float, west: float, north: float,
 # at 0.12 GB), that is about this much, plus what the program itself takes.
 BYTES_PER_TILE = 80
 BASE_BYTES = 150e6
+# Generate buildings reads the ground and vegetation back (3 bytes a tile each)
+# and works masks out of them. Measured on a 7200 x 4800 map: 684 MB at the
+# peak, 20 bytes a tile; this leaves some room over that. The same numbers are
+# in static/js/app.js (BUILD_BYTES_PER_TILE).
+BUILD_BYTES_PER_TILE = 24
+BUILD_BASE_BYTES = 300e6
 
 
-def _too_big_for_memory(tiles_w: float, tiles_h: float) -> str | None:
+def _too_big_for_memory(tiles_w: float, tiles_h: float,
+                        per_tile: float = BYTES_PER_TILE,
+                        base: float = BASE_BYTES) -> str | None:
     """Why this map will not fit in memory, or None when it should.
 
     A 32-bit Python can only use about 2 GB however much the PC has, and a map
@@ -697,7 +705,7 @@ def _too_big_for_memory(tiles_w: float, tiles_h: float) -> str | None:
     fail with "MemoryError".
     """
     import knoxpaths
-    needed = tiles_w * tiles_h * BYTES_PER_TILE + BASE_BYTES
+    needed = tiles_w * tiles_h * per_tile + base
     status = knoxlog.memory_status()
     if not status:
         return None
@@ -1111,6 +1119,17 @@ def api_buildings():
     settings = Settings.from_dict(data.get("settings"))         if data.get("settings") else _load_settings(map_dir)
     _save_settings(map_dir, settings)
     log.info("buildings %s: started", map_dir.name)
+    # Say so now if this PC cannot hold the map's bitmaps, rather than after
+    # minutes of work. Free memory moves, so only a 32-bit Python's hard 2 GB
+    # ceiling refuses outright; anything else is let through and caught below.
+    info = _map_summary(map_dir)
+    tight = _too_big_for_memory(info["width"], info["height"],
+                                BUILD_BYTES_PER_TILE, BUILD_BASE_BYTES)
+    if tight and sys.maxsize <= 2 ** 32:
+        return jsonify({"error": tight}), 507
+    if tight:
+        log.warning("buildings %s: going ahead with a heavy map - %s",
+                    map_dir.name, tight)
     t0 = time.time()
     out = io.StringIO()
     try:
@@ -1120,6 +1139,15 @@ def api_buildings():
                             should_stop=_stopper(map_dir.name))
     except knoxstop.Stopped:
         return _stopped(map_dir.name, "buildings")
+    except MemoryError as exc:
+        need = info["width"] * info["height"] * BUILD_BYTES_PER_TILE + BUILD_BASE_BYTES
+        return failed(
+            f"Generate buildings ran out of memory. A map of "
+            f"{info['width']}x{info['height']} tiles needs about "
+            f"{need / 1e9:.1f} GB for this step. Close a few things and try "
+            f"again, or draw the map at a larger scale: 2 m a tile is a quarter "
+            f"of the memory of 1 m. Nothing is lost: the map itself is saved, "
+            f"so Generate buildings can simply be run again.", 507, exc)
     except Exception as exc:
         log.info("buildings %s output before the error:\n%s", map_dir.name,
                  out.getvalue()[-4000:])
