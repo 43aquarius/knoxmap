@@ -1,5 +1,69 @@
 # Changelog
 
+## 1.5.1
+
+- **A house has a believable number of bedrooms** (`knoxbuild/layout.py`,
+  contributed by makerpoop1). Bedrooms are dealt out against floor area and
+  capped, where before every room left over after the kitchen, the living room
+  and the bathroom became another bedroom: a big footprint came out with up to
+  45 of them, and 178 of 200 houses had more than five. Now none do and the
+  mean is 4.3 against 12.9. A station, a school and a clinic also keep the one
+  room that makes them what they are - the corridor pass was free to turn a
+  police station's only office into a corridor.
+
+- **The rooms left over are not all store cupboards** (`knoxbuild/layout.py`).
+  Capping the bedrooms left everything past them to one fallback, which was
+  storage, so a fourteen-room house came out as five bedrooms and nine
+  storerooms - 2747 of them in 200 houses against 321 before, making storage
+  the commonest room in a house by three times over. They are dealt round the
+  rooms a house actually has more than one of instead: storage, laundry,
+  office, closet.
+
+- **A bathroom has a bath in it again** (`knoxbuild/layout.py`). The new
+  fixture plan wanted 14 tiles before it would fit a tub, and this generator
+  cuts bathrooms at 9 to 12 to match Knox County's 6.5 m2 - so 98.5% of them
+  fell under the line, took the shower instead, and 378 baths in 200 houses
+  became none. The line is the bottom of that band now, and the tub goes in
+  before the toilet and the basin that were taking the run of two tiles it
+  needs: all 227 bathrooms in the sample have one. A household bathroom still
+  never gets a bath and a separate cubicle both, which is the point of the
+  change that broke it.
+
+- **Furniture is not torn out to make every bare tile walkable**
+  (`knoxbuild/layout.py`). The pass that opens up a blocked room was asked to
+  guarantee that every square of floor nobody is standing on can be reached,
+  which a furnished room cannot promise: the tile at the end of the bath and
+  the corner behind the bed are shut off by design. It was clearing three
+  times what it used to - 78 baths and 247 beds in 200 houses - so a pocket of
+  one or two tiles is now left alone and only a part of a room is opened up.
+  The square at a window is still cleared, because a window you cannot reach
+  cannot be opened or climbed through, but not for the things that belong
+  under one: a bath, a bed, a sofa, a worktop. 1617 pieces removed down to
+  1107, and the bookcase across the middle of the room still goes.
+
+- **Streets know what kind of street they are** (`generator/osm.py`,
+  `generator/renderer.py`, `knoxbuild/build.py`, `knoxbuild/context.py`,
+  contributed by makerpoop1). The OSM highway tag is rasterised into a map of
+  its own beside the landscape, and carriageway width, pavement and verge all
+  come off it - a motorway is 24 m across with no pavement, a residential
+  street 6 m with 2.5 m either side. Lamps, hydrants, drains and speed signs
+  are spaced by the same class rather than one spacing everywhere, and they
+  stand on a pavement or a verge now instead of anywhere off the tarmac.
+  Kerbside parking goes by class too, so a trunk road is not lined with
+  parked cars. Buildings are nudged out of a road they overlap whether or not
+  roads were straightened, and the bigger the road the harder it pushes.
+
+- **Every wall style has a window cutout** (`knoxbuild/catalog.py`,
+  `knoxbuild/tbx.py`, contributed by makerpoop1). A wall style carried a
+  cutout tile for the first window sprite only, so a wall using one of the
+  alternates had nothing to cut the hole with.
+
+- **A public lavatory is sized for the room, and its basin stands on its own**
+  (`knoxbuild/layout.py`, `tools/selftest.py`, contributed by makerpoop1). Two
+  cubicles and two basins whatever the room; it is one to three of each by
+  area now. A pedestal basin was also being given a worktop to sit on, which
+  is what a household basin needs and a public one does not.
+
 ## 1.5
 
 - **Half a metre to the tile is back** (`app.py`, `templates/index.html`,
