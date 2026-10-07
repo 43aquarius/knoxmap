@@ -339,6 +339,11 @@ def _number(raw: str | None) -> float | None:
         value = float(text)
     except ValueError:
         return None
+    # float() reads "inf", "Infinity", "nan" and "1e999" as numbers. None of them
+    # is a height, and each one raised in the int() a few lines on - outside the
+    # per-building handling, so one such tag stopped the whole build.
+    if not math.isfinite(value):
+        return None
     return value * 0.3048 if feet else value
 
 
@@ -526,6 +531,40 @@ def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
     return styles[idx]
 
 
+STALL_W, STALL_H = 3, 5
+CAR_PARK_LANE = 17            # two rows of 5, and a 7-tile lane
+
+
+def car_park_stalls(bounds: tuple[int, int, int, int], w: int, h: int):
+    """Where a stall could go in a car park with these bounds, as (x, y, sw, sh),
+    in the order they are tried - only the ones that lie on the map.
+
+    This used to walk the whole bounding box of the car park and throw away what
+    was off the map afterwards. A car park a few hundred metres past the edge
+    costs nothing; a polygon of the whole country mapped as one (it happens) was
+    hundreds of millions of steps. Starting each run at the first position that
+    can be on the map visits the same stalls in the same order."""
+    x0, y0, x1, y1 = bounds
+    across = (x1 - x0) >= (y1 - y0)          # rows run along the long side
+    sw, sh = (STALL_W, STALL_H) if across else (STALL_H, STALL_W)
+    # b runs along the rows, a across them; a + row is the offset of a stall's row.
+    b_origin, b_len, b_map = (x0, x1 - x0, w) if across else (y0, y1 - y0, h)
+    a_origin, a_len, a_map = (y0, y1 - y0, h) if across else (x0, x1 - x0, w)
+    lane = CAR_PARK_LANE
+    a_lo = max(0, -a_origin - STALL_H)
+    a_start = -(-a_lo // lane) * lane
+    a_stop = min(a_len, a_map - STALL_H - a_origin + 1)
+    b_lo = max(0, -b_origin)
+    b_start = -(-b_lo // STALL_W) * STALL_W
+    b_stop = min(b_len, b_map - STALL_W - b_origin + 1)
+    for a in range(a_start, a_stop, lane):
+        for row in (0, STALL_H):
+            for b in range(b_start, b_stop, STALL_W):
+                x, y = (x0 + b, y0 + a + row) if across else (x0 + a + row, y0 + b)
+                if 0 <= x and x + sw <= w and 0 <= y and y + sh <= h:
+                    yield x, y, sw, sh
+
+
 def _detect_zones(landscape_path: str, placements, rng_seed: int = 7,
                   settings: Settings | None = None, areas=None, drives=(),
                   keep_clear=(), road_hierarchy: np.ndarray | None = None):
@@ -593,29 +632,21 @@ def _detect_zones(landscape_path: str, placements, rng_seed: int = 7,
         lots = [shape for shape, props in areas._items if props.get("category") == "parking"]
         hard = ASPHALT | {C.PALE_CONCRETE, C.PAVING}
         for lot in lots:
-            x0, y0, x1, y1 = (int(v) for v in lot.bounds)
-            across = (x1 - x0) >= (y1 - y0)      # rows run along the long side
-            sw, sh = (STALL_W, STALL_H) if across else (STALL_H, STALL_W)
-            lane = 17                            # two rows of 5, and a 7-tile lane
-            for a in range(0, (y1 - y0 if across else x1 - x0), lane):
-                for row in (0, STALL_H):
-                    for b in range(0, (x1 - x0 if across else y1 - y0), STALL_W):
-                        x, y = (x0 + b, y0 + a + row) if across else (x0 + a + row, y0 + b)
-                        if not (0 <= x and x + sw <= w and 0 <= y and y + sh <= h):
-                            continue
-                        stall = box(x, y, x + sw, y + sh)
-                        if not lot.contains(stall):
-                            continue
-                        if any(px[i, j] not in hard for i in (x, x + sw - 1)
-                               for j in (y, y + sh - 1)):
-                            continue
-                        if built is not None and any(buildings[int(i)].intersects(stall)
-                                                     for i in built.query(stall)):
-                            continue
-                        if rng.random() > min(1.0, 0.55 * settings.parking_density):
-                            continue
-                        taken.add((x // 8, y // 8))
-                        zones.append(Zone("ParkingStall", x, y, sw, sh))
+            bounds = tuple(int(v) for v in lot.bounds)
+            for x, y, sw, sh in car_park_stalls(bounds, w, h):
+                stall = box(x, y, x + sw, y + sh)
+                if not lot.contains(stall):
+                    continue
+                if any(px[i, j] not in hard for i in (x, x + sw - 1)
+                       for j in (y, y + sh - 1)):
+                    continue
+                if built is not None and any(buildings[int(i)].intersects(stall)
+                                             for i in built.query(stall)):
+                    continue
+                if rng.random() > min(1.0, 0.55 * settings.parking_density):
+                    continue
+                taken.add((x // 8, y // 8))
+                zones.append(Zone("ParkingStall", x, y, sw, sh))
 
     for y in range(4, h - STALL_H - 4, step):
         for x in range(4, w - STALL_W - 4, step):
@@ -911,37 +942,117 @@ def _make_one(job: tuple) -> tuple:
 # Below this many buildings, starting worker processes costs more than it saves.
 PARALLEL_FROM = 60
 
+# What the last build made, kept beside its files so that building again - a new
+# zombie setting, a few footprints moved - lays out only the buildings whose
+# inputs changed. A building's .tbx depends on nothing but its own job (every
+# random choice is seeded from it, see tbx._stable_seed) and on the code that
+# lays it out, so the same job under the same code gives the same file.
+CACHE_FILE = "build_cache.json"   # in the map folder, not buildings/: that is all .tbx
 
-def _make_all(jobs: list[tuple]) -> list[tuple[int, int, int]]:
+
+def _code_fingerprint() -> str:
+    """Changes whenever the code that lays a building out does, or the tiles it
+    may use. A cache from other code is not trusted: the same job would come
+    out differently."""
+    import hashlib
+
+    from .layout import _erika_ready
+
+    h = hashlib.sha1()
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in sorted(os.listdir(here)):
+        if name.endswith(".py"):
+            h.update(name.encode())
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(f.read())
+    h.update(b"erika" if _erika_ready() else b"vanilla")
+    return h.hexdigest()
+
+
+def _job_key(job: tuple) -> str:
+    """A building's inputs as one string. The file name (index 10) is left out:
+    numbers shift when a footprint is added, and the building does not change."""
+    import hashlib
+    import pickle
+
+    return hashlib.sha1(pickle.dumps(job[:10] + job[11:], protocol=4)).hexdigest()
+
+
+def _read_cache(out_dir: str, code: str) -> dict:
+    try:
+        with open(os.path.join(out_dir, CACHE_FILE), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("code") != code:
+        return {}
+    return data.get("buildings") or {}
+
+
+def _write_cache(out_dir: str, code: str, entries: dict) -> None:
+    try:
+        tmp = os.path.join(out_dir, CACHE_FILE + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"code": code, "buildings": entries}, f)
+        os.replace(tmp, os.path.join(out_dir, CACHE_FILE))
+    except OSError:
+        pass          # no cache means the next build lays everything out again
+
+
+def _make_all(jobs: list[tuple], tick=None) -> list[tuple[int, int, int]]:
     """Every building, in order, across processes when there are enough.
 
     KNOXBUILD_WORKERS=1 forces one process. If worker processes cannot start
     at all - some locked-down PCs refuse them - the work simply runs here.
+    `tick(done, total)` is called as results come in, for a progress readout.
     """
+    def run_here() -> list:
+        out = []
+        for job in jobs:
+            out.append(_make_one(job))
+            if tick and len(out) % 25 == 0:
+                tick(len(out), len(jobs))
+        return out
+
     workers = int(os.environ.get("KNOXBUILD_WORKERS") or
                   max(1, min(12, (os.cpu_count() or 2) - 2)))
     if workers <= 1 or len(jobs) < PARALLEL_FROM:
-        return [_make_one(job) for job in jobs]
+        return run_here()
     from concurrent.futures import ProcessPoolExecutor
     from concurrent.futures.process import BrokenProcessPool
 
     try:
         with ProcessPoolExecutor(max_workers=workers) as pool:
-            return list(pool.map(_make_one, jobs,
-                                 chunksize=max(4, len(jobs) // (workers * 8))))
+            out = []
+            for result in pool.map(_make_one, jobs,
+                                   chunksize=max(4, len(jobs) // (workers * 8))):
+                out.append(result)
+                if tick and len(out) % 25 == 0:
+                    tick(len(out), len(jobs))
+            return out
     except (BrokenProcessPool, OSError) as exc:
         print(f"  (worker processes unavailable: {exc}; building in one process)")
-        return [_make_one(job) for job in jobs]
+        return run_here()
 
 
 def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
           max_size: int | None = None, settings: Settings | None = None,
-          should_stop=None) -> int:
+          should_stop=None, progress=None) -> int:
     """Generate every building for a rendered map.
 
     The explicit seed/min_size/max_size arguments are kept so the command line
     can override one value without composing a whole Settings.
+
+    `progress(text, fraction)`, when given, is called as the work moves on:
+    a short account of the stage, and how far through the whole run it is
+    (0 to 1, or None when that is not known). The fractions are rough: where
+    each stage starts, not a measured share of the time.
     """
+    def say(text: str, fraction: float | None = None) -> None:
+        if progress:
+            progress(text, fraction)
+
+    say("Reading the map", 0.0)
     settings = settings or Settings()
     overrides = {k: v for k, v in (("seed", seed), ("min_size", min_size),
                                    ("max_size", max_size)) if v is not None}
@@ -994,12 +1105,21 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
 
     bdir = os.path.join(out_dir, "buildings")
     os.makedirs(bdir, exist_ok=True)
-    # Clear out the previous build. Building numbers follow the footprints, so
-    # a rebuild does not overwrite the same set of files, and leftovers from an
-    # earlier run sit in the folder looking like part of the map.
-    for stale in os.listdir(bdir):
-        if stale.endswith(".tbx"):
-            os.remove(os.path.join(bdir, stale))
+    # What the last build left. Building numbers follow the footprints, so a
+    # rebuild does not overwrite the same set of files, and leftovers from an
+    # earlier run would sit in the folder looking like part of the map: the
+    # ones this build does not write are removed once it has finished (below),
+    # and the ones it can reuse are left alone until then.
+    earlier_files = {f for f in os.listdir(bdir) if f.endswith(".tbx")}
+    code = _code_fingerprint()
+    earlier = _read_cache(out_dir, code)
+    # Gone until this build has finished and written it again. A build that
+    # stops half way leaves some files rewritten and some not, and a cache
+    # that still described the old ones would vouch for the wrong files.
+    try:
+        os.remove(os.path.join(out_dir, CACHE_FILE))
+    except OSError:
+        pass
     # WorldEd writes into these but will not create them: BMP to TMX fails with
     # "Could not open file for writing" if the export directory is absent.
     os.makedirs(os.path.join(out_dir, "tmx"), exist_ok=True)
@@ -1276,9 +1396,33 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     # across processes: a 4,000-building district took three minutes on one.
     failed_buildings = []
     escalator_squares: list = []
+    keys = [_job_key(job) for job in jobs]
+    results: list = [None] * len(jobs)
+    todo = []
+    for j, d in enumerate(decided):
+        old = earlier.get(d[0])
+        if (old and old.get("key") == keys[j] and d[0] in earlier_files
+                and os.path.exists(os.path.join(bdir, d[0]))):
+            storeys, rooms, furniture, escalators = old["result"]
+            results[j] = (storeys, rooms, furniture, None,
+                          [tuple(e) for e in escalators])
+        else:
+            todo.append(j)
+    reused = len(jobs) - len(todo)
+    if reused:
+        print(f"reused {reused} of {len(jobs)} buildings from the last build")
+    say(f"Laying out {len(todo):,} buildings"
+        + (f" ({reused:,} reused from the last build)" if reused else ""), 0.05)
+
+    def laid_out(done: int, total: int) -> None:
+        say(f"Laying out buildings: {done:,} of {total:,}", 0.05 + 0.55 * done / total)
+
+    for j, result in zip(todo, _make_all([jobs[j] for j in todo], laid_out)):
+        results[j] = result
+
     for (fname, label, x0, y0, w, h, fp, px, special, measured, commercial,
          style, mask, real_name), (storeys, rooms, furniture, error,
-                                   escalators) in zip(decided, _make_all(jobs)):
+                                   escalators) in zip(decided, results):
         if error:
             failed_buildings.append(error)
             continue
@@ -1311,6 +1455,17 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     rows.sort(key=lambda r: r["file"])
     knoxstop.check(should_stop, "the buildings")
 
+    # Remember what was made, and clear out what was left from before and not
+    # written this time.
+    entries = {d[0]: {"key": keys[j], "result": [r_[0], r_[1], r_[2], r_[4]]}
+               for j, (d, r_) in enumerate(zip(decided, results)) if not r_[3]}
+    _write_cache(out_dir, code, entries)
+    for stale in earlier_files - set(entries):
+        try:
+            os.remove(os.path.join(bdir, stale))
+        except OSError:
+            pass
+
     # One military rifle somewhere on the map, whatever this town turned out
     # to be: an army building, else the police station, else a gun shop, else
     # a house on the edge of town (knoxbuild/guns.py). A real place has no
@@ -1322,6 +1477,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         out_dir, map_name,
         guns.choose(rows, gunshops) if settings.guaranteed_rifle else None,
         origin(), CELL_SIZE)
+    say("Front paths, yards and porch lights", 0.62)
     from .yards import paint_paths
     drives: list = []
     porch_lights: list = []
@@ -1334,6 +1490,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     escalator_placements = pack_loose(bdir, map_name, "escalators",
                                       escalator_squares, on_top=True)
 
+    say("Petrol pumps, graves and other props", 0.74)
     # Pumps on a forecourt at each petrol station, including those mapped as
     # a point with no building of their own.
     from .pumps import place_pumps
@@ -1354,6 +1511,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     # it or what another one reads: fences, the zombie spawn map, the paper
     # map, the parking/town zones and the bridges. Mostly numpy and shapely,
     # which let go of the interpreter lock, so threads overlap them.
+    say("Fences, zombies, zones and the paper map", 0.82)
     from concurrent.futures import ThreadPoolExecutor
     from .structures import build_structures
 
@@ -1396,6 +1554,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                   pump_placements + prop_placements + light_placements
                   + escalator_placements)
 
+    say("Writing the WorldEd project", 0.95)
     pzw_path = os.path.join(out_dir, f"{map_name}.pzw")
     with open(pzw_path, "w", encoding="utf-8") as f:
         f.write(render_pzw(info["cells_x"], info["cells_y"],

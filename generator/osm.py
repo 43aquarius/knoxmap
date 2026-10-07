@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+import zlib
 from concurrent import futures
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
@@ -770,8 +771,19 @@ def save_cache(path: str, bbox: tuple[float, float, float, float],
         ],
     }
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with gzip.open(path, "wt", encoding="utf-8") as fh:
-        json.dump(payload, fh)
+    # Written beside the file and moved over it, so a crash or a full disk part
+    # way through leaves the old file (or none), never half of a new one.
+    partial = path + ".part"
+    try:
+        with gzip.open(partial, "wt", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(partial, path)
+    except BaseException:
+        try:
+            os.remove(partial)
+        except OSError:
+            pass
+        raise
 
 
 def load_cache(path: str,
@@ -779,25 +791,29 @@ def load_cache(path: str,
     """Cached features for exactly this bbox, or None."""
     if not os.path.exists(path):
         return None
+    # A cache is only ever a shortcut: whatever is wrong with the file - cut
+    # short by a crash (EOFError, not an OSError), not what it should be, an
+    # entry with a field missing - the answer is "not cached" and the area is
+    # downloaded again, not a failed map.
     try:
         with gzip.open(path, "rt", encoding="utf-8") as fh:
             payload = json.load(fh)
-    except (OSError, ValueError):
+        if payload.get("filters") != FILTERS_VERSION:
+            return None
+        cached = payload.get("bbox") or []
+        if len(cached) != 4 or any(abs(a - b) > 1e-9 for a, b in zip(cached, bbox)):
+            return None
+        out = []
+        for d in payload.get("features", []):
+            out.append(OSMFeature(
+                d["osm_id"], d["kind"], d.get("tags") or {},
+                [tuple(c) for c in d.get("geometry") or []],
+                [(role, [tuple(c) for c in ring])
+                 for role, ring in d.get("role_geoms") or []],
+            ))
+        return out
+    except (OSError, EOFError, ValueError, KeyError, TypeError, AttributeError, zlib.error):
         return None
-    if payload.get("filters") != FILTERS_VERSION:
-        return None
-    cached = payload.get("bbox") or []
-    if len(cached) != 4 or any(abs(a - b) > 1e-9 for a, b in zip(cached, bbox)):
-        return None
-    out = []
-    for d in payload.get("features", []):
-        out.append(OSMFeature(
-            d["osm_id"], d["kind"], d.get("tags") or {},
-            [tuple(c) for c in d.get("geometry") or []],
-            [(role, [tuple(c) for c in ring])
-             for role, ring in d.get("role_geoms") or []],
-        ))
-    return out
 
 
 def assemble_rings(role_geoms: list[tuple[str, list[tuple[float, float]]]]
@@ -833,36 +849,58 @@ def assemble_rings(role_geoms: list[tuple[str, list[tuple[float, float]]]]
     return out or role_geoms
 
 
+def _points(geometry) -> list[tuple[float, float]]:
+    """The (lat, lon) points of an Overpass geometry list.
+
+    A point that is null or has no coordinates is dropped, not fatal: Overpass
+    leaves a null where a node is not in the data (clipped output, a relation
+    member whose way is missing), and a file saved from overpass-turbo can have
+    them too. One of those used to fail the whole answer - and with it the
+    whole tile, on every server, since they all send the same thing."""
+    out = []
+    for p in geometry or []:
+        try:
+            out.append((float(p["lat"]), float(p["lon"])))
+        except (TypeError, KeyError, ValueError):
+            continue
+    return out
+
+
 def _parse(payload: dict) -> list[OSMFeature]:
-    elements = payload.get("elements", [])
+    if not isinstance(payload, dict):
+        return []
     out: list[OSMFeature] = []
-    for el in elements:
+    for el in payload.get("elements") or []:
+        if not isinstance(el, dict):
+            continue
         kind = el.get("type")
-        tags = el.get("tags", {}) or {}
+        tags = el.get("tags") or {}
+        ident = el.get("id", 0)
         if kind == "way":
-            coords = [(p["lat"], p["lon"]) for p in el.get("geometry", [])]
+            coords = _points(el.get("geometry"))
             if coords:
-                out.append(OSMFeature(el["id"], "way", tags, coords))
+                out.append(OSMFeature(ident, "way", tags, coords))
         elif kind == "relation":
             rings: list[list[tuple[float, float]]] = []
             role_geoms: list[tuple[str, list[tuple[float, float]]]] = []
-            for m in el.get("members", []):
-                geom = m.get("geometry")
-                if not geom:
+            for m in el.get("members") or []:
+                if not isinstance(m, dict):
                     continue
-                ring = [(p["lat"], p["lon"]) for p in geom]
-                role_geoms.append((m.get("role", ""), ring))
+                ring = _points(m.get("geometry"))
+                if not ring:
+                    continue
+                role_geoms.append((m.get("role") or "", ring))
                 rings.append(ring)
             if rings:
                 role_geoms = assemble_rings(role_geoms)
-                feat = OSMFeature(el["id"], "relation", tags,
+                feat = OSMFeature(ident, "relation", tags,
                                   [ring for _role, ring in role_geoms] or rings)
                 feat.role_geoms = role_geoms
                 out.append(feat)
         elif kind == "node":
             lat, lon = el.get("lat"), el.get("lon")
             if lat is not None and lon is not None:
-                out.append(OSMFeature(el["id"], "node", tags, [(lat, lon)]))
+                out.append(OSMFeature(ident, "node", tags, [(lat, lon)]))
     return out
 
 

@@ -25,6 +25,11 @@ BUILDING_ALIGNMENT_OPTIONS = {"real", "smart", "rectilinear", "rectangle"}
 
 
 def _polygon(px: list[tuple[float, float]]):
+    # One or two points are not a shape; Shapely raises on them, and place()
+    # says "small" for an empty one. The build already skips these before it
+    # gets here, so this is for whoever calls place() next.
+    if len(px) < 3:
+        return Polygon()
     poly = Polygon(px)
     if not poly.is_valid:
         poly = poly.buffer(0)

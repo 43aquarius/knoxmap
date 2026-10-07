@@ -591,6 +591,50 @@ def default_workers() -> int:
     return max(1, min(MAX_WORKERS, cores // 4, by_memory))
 
 
+class Throttle:
+    """How many batches may run at once, lowered when WorldEd starts failing.
+
+    Six at once on an 8-core, 32 GB PC made WorldEd fail with "Error Loading
+    Image" and most batches needed a retry, each retry costing minutes. What
+    is too many depends on the PC, so the run starts at the configured number
+    and gives up one slot whenever a batch fails while others are running, then
+    stays there. It only goes down, and never below one. A burst of failures
+    from one overload counts once: the batches that were already running fail
+    together, and easing for each would drop straight to one.
+    """
+
+    EASE_EVERY_S = 90.0
+
+    def __init__(self, limit: int):
+        self.start = self.limit = max(1, int(limit))
+        self.running = 0
+        self._cond = threading.Condition()
+        self._eased_at = 0.0
+
+    def acquire(self, should_stop=None) -> None:
+        with self._cond:
+            while self.running >= self.limit:
+                knoxstop.check(should_stop, "the compile")
+                self._cond.wait(timeout=1.0)
+            self.running += 1
+
+    def release(self) -> None:
+        with self._cond:
+            self.running -= 1
+            self._cond.notify_all()
+
+    def ease(self) -> int | None:
+        """Give up a slot after a failure. Returns the new limit when it went
+        down, None when it stayed (already at one, or eased a moment ago)."""
+        with self._cond:
+            now = time.time()
+            if self.limit <= 1 or now - self._eased_at < self.EASE_EVERY_S:
+                return None
+            self.limit -= 1
+            self._eased_at = now
+            return self.limit
+
+
 def _free_memory_gb() -> float:
     """Memory available right now, in GB; 0 when it cannot be told."""
     try:
@@ -618,7 +662,8 @@ def _free_memory_gb() -> float:
 
 def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                 on_progress=None, should_stop=None,
-                only_cells: list | None = None, workers: int | None = None) -> int:
+                only_cells: list | None = None, workers: int | None = None,
+                on_detail=None, incremental: bool = True, fresh: bool = False) -> int:
     """Run every batch. Returns the number of compiled cells.
 
     A batch that fails is tried again (BATCH_ATTEMPTS) and, if it still will
@@ -631,6 +676,18 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
     machine rather than this batch: a Qt that cannot start fails every batch
     in exactly the same way, and forty-eight batches of it is hours of
     nothing. Those stop the run at once, with what to do about it.
+
+    `on_detail`, when given, is called with {"workers": batches allowed at
+    once, "started_with": what the run began at, "eta_s": seconds left or None}
+    whenever a batch ends, for the window to show. The first call, before any
+    batch starts, also carries "incremental": {"changed": cells that differ
+    from the last compile, "cells": cells in the world, "batches": how many
+    batches will run, "of": how many there are} when the compile is only
+    redoing what changed.
+
+    `incremental` lets a map that was compiled cleanly before keep the lots of
+    every cell that has not changed (see compile_state.py); `fresh` throws
+    everything compiled away first.
     """
     if workers is None:
         workers = default_workers()
@@ -648,7 +705,6 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
     run = uuid.uuid4().hex[:8]
 
     with _only_one(project, run):
-        clear_stale(project)
         # Whatever wrote the project, one entry past the edge of the map must not
         # stop the whole compile: WorldEd refuses a project over a single one.
         from knoxbuild.repair import repair_project
@@ -671,11 +727,62 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
         if not w or not h:
             raise ValueError(f"Could not read the world size from {pzw.name}")
 
+        # What to throw away before compiling. With a record of the last clean
+        # compile, only the cells that changed; otherwise whatever is older
+        # than what it was compiled from, as before.
+        from tools import compile_state as cstate
+        # Not when only some cells were asked for: that is a retry of the ones
+        # that failed, and it must not throw away all the ones that did not.
+        if fresh and not only_cells:
+            cstate.wipe(project)
+        now = None
+        redo = None
+        if only_cells or not incremental:
+            clear_stale(project)
+        else:
+            try:
+                now = cstate.fingerprints(project)
+                redo = cstate.plan(cstate.load(project), now,
+                                   any(lots.glob("*.lotheader")))
+            except Exception as exc:  # noqa: BLE001 - no record is not a reason to stop
+                knoxlog.log.warning("compile %s [%s]: could not tell what changed (%s: %s); "
+                                    "using file times", project.name, run,
+                                    type(exc).__name__, exc)
+            if redo is None:
+                clear_stale(project)
+            else:
+                gone = cstate.discard(project, redo, tuple(now["origin"]))
+                knoxlog.log.info(
+                    "compile %s [%s]: %d of %d cells changed; discarded %d lot files "
+                    "and %d maps, the rest is kept", project.name, run, redo["changed"],
+                    w * h, gone["lots"], gone["tmx"])
+
+        # The record describes the lots as they were after the last compile that
+        # finished, and this one is about to change them. If it stops half way
+        # and the inputs then go back to what they were, a record that still
+        # said "unchanged" would keep lots that were already rebuilt from the
+        # other inputs. It is written again, from this run's fingerprints, only
+        # when the run finishes cleanly.
+        cstate.forget(project)
+
         if only_cells:
             batches = [tuple(int(v) for v in cells[:4]) for cells in only_cells]
         else:
             batches = [(x, y, min(x + batch - 1, w - 1), min(y + batch - 1, h - 1))
                        for y in range(0, h, batch) for x in range(0, w, batch)]
+            # Starting WorldEd loads the whole tile catalogue, a minute or more
+            # each, so a batch that has nothing to do is not started at all.
+            origin = tuple(now["origin"]) if now else cstate.origin_of(pzw)
+            every = len(batches)
+            batches = [b for b in batches
+                       if cstate.batch_needs_work(project, b, origin, (w, h))]
+            if on_detail and redo is not None:
+                on_detail({"workers": workers, "started_with": workers, "eta_s": None,
+                           "incremental": {"changed": redo["changed"], "cells": w * h,
+                                           "batches": len(batches), "of": every}})
+            if not batches:
+                knoxlog.log.info("compile %s [%s]: every lot file is there; nothing to "
+                                 "compile", project.name, run)
         started = time.time()
         failures: list[dict] = []
         total = len(batches)
@@ -685,6 +792,8 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
         # so it goes alone, and the rest may then run side by side.
         guard = threading.Lock()
         finished = [0]
+        throttle = Throttle(workers)
+        timing = {"first_done": None}
 
         def do_batch(i, bx, by, x1, y1):
             cmd = knoxpaths.command_for(exe_path) + [
@@ -692,8 +801,14 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                 f"--cells={bx},{by},{x1},{y1}"]
             for attempt in range(1, BATCH_ATTEMPTS + 1):
                 knoxstop.check(should_stop, "the compile")
-                attempt_started = time.time()
-                proc = _run_batch(cmd, should_stop, attempt_started)
+                # A slot is held for one attempt, not the whole batch, so a
+                # retry waits its turn under whatever the limit is by then.
+                throttle.acquire(should_stop)
+                try:
+                    attempt_started = time.time()
+                    proc = _run_batch(cmd, should_stop, attempt_started)
+                finally:
+                    throttle.release()
                 # WorldEd's own account of the batch, kept whatever happened: when it
                 # crashes this is the only record of how far it got.
                 saved = knoxlog.save_tool_output("PZWorldEd_cli", project.name,
@@ -707,6 +822,12 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                                  time.time() - attempt_started, again)
                 if proc.returncode == 0:
                     break
+                eased = throttle.ease() if throttle.running else None
+                if eased is not None:
+                    knoxlog.log.warning(
+                        "compile %s [%s]: batch %d/%d failed while others were "
+                        "running; from now on %d at a time (it began at %d)",
+                        project.name, run, i, total, eased, throttle.start)
                 # Not this batch's fault, and every other batch would go the
                 # same way: stop now and say what to do about it.
                 trouble = knoxpaths.qt_trouble((proc.stderr or "") + (proc.stdout or ""))
@@ -731,6 +852,20 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                                       "rest", project.name, run, i, total,
                                       bx, by, x1, y1, BATCH_ATTEMPTS)
                 finished[0] += 1
+                now_t = time.time()
+                if timing["first_done"] is None:
+                    timing["first_done"] = (now_t, finished[0])
+                eta = None
+                t_first, n_first = timing["first_done"]
+                # Seconds per batch since the first one ended (the first runs
+                # alone and converts the whole bitmap, so it is not typical),
+                # needing a few batches before the figure means anything.
+                if finished[0] - n_first >= 3 and now_t > t_first:
+                    rate = (finished[0] - n_first) / (now_t - t_first)
+                    eta = int((total - finished[0]) / rate)
+                if on_detail:
+                    on_detail({"workers": throttle.limit,
+                               "started_with": throttle.start, "eta_s": eta})
                 if on_progress:
                     on_progress(finished[0], total, cells)
                 else:
@@ -768,6 +903,10 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
             failures = [f for f in failed_cells(project)
                         if tuple(f.get("cells") or ()) not in done] + failures
         _record_failures(project, run, batch, failures)
+        # A compile that did everything it was asked to leaves a record, so the
+        # next one can do only what changes after it.
+        if now is not None and not failures and not only_cells:
+            cstate.save(project, now)
         if this_run and len(this_run) >= len(batches):
             first = this_run[0]
             where = f" - WorldEd's output is in {first['log']}" if first.get("log") else ""

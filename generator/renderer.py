@@ -476,8 +476,12 @@ def _way_width_m(feat: OSMFeature, cat: str) -> float:
     if raw:
         # OSM widths are metres unless suffixed; "7", "7 m" and "7.5" all occur.
         try:
-            return max(2.0, min(30.0, float(str(raw).split()[0].replace(",", "."))))
-        except ValueError:
+            given = float(str(raw).split()[0].replace(",", "."))
+            # "nan" is a number to float(), and min(30.0, nan) is 30.0: a road
+            # tagged width=nan came out thirty metres wide.
+            if math.isfinite(given):
+                return max(2.0, min(30.0, given))
+        except (ValueError, IndexError):      # IndexError: a width of " "
             pass
     lanes = feat.tags.get("lanes")
     if lanes:
@@ -1847,7 +1851,7 @@ def _places(feats: list[OSMFeature], proj: Projector) -> list[dict]:
         raw = str(f.tags.get("population", "")).replace(",", "").replace(" ", "")
         try:
             population = int(float(raw.split(";")[0]))
-        except ValueError:
+        except (ValueError, OverflowError):      # OverflowError: "inf", "1e999"
             continue
         la, lo = f.geometry[0]
         x, y = proj.to_px(la, lo)

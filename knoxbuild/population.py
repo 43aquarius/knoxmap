@@ -78,24 +78,26 @@ GROUND_STRIP_CHUNKS = 64
 
 def _ground_shares(path: str, gw: int, gh: int) -> tuple[np.ndarray, np.ndarray]:
     """(paved share, water share) of every chunk, 0..1."""
+    from .bitmaps import read_rgb_rows, same_colour
+
     paved = np.zeros((gh, gw), dtype=float)
     water = np.zeros((gh, gw), dtype=float)
-    with Image.open(path) as img:
-        ground = img.convert("RGB")
-        for top in range(0, gh, GROUND_STRIP_CHUNKS):
-            rows = min(GROUND_STRIP_CHUNKS, gh - top)
-            strip = np.asarray(ground.crop((0, top * CHUNK, gw * CHUNK,
-                                            (top + rows) * CHUNK)))
-            if strip.shape[:2] != (rows * CHUNK, gw * CHUNK):
-                continue
-            is_paved = np.zeros(strip.shape[:2], dtype=bool)
-            for colour in STREET_COLOURS:
-                is_paved |= np.all(strip == colour, axis=2)
-            is_water = np.all(strip == np.array(C.WATER), axis=2)
-            shape = (rows, CHUNK, gw, CHUNK)
-            paved[top:top + rows] = is_paved.reshape(shape).mean(axis=(1, 3))
-            water[top:top + rows] = is_water.reshape(shape).mean(axis=(1, 3))
-            del strip, is_paved, is_water
+    for top in range(0, gh, GROUND_STRIP_CHUNKS):
+        rows = min(GROUND_STRIP_CHUNKS, gh - top)
+        # Only this strip is read. The picture used to be opened and converted
+        # whole first, which held it twice over - what the strips were there
+        # to avoid.
+        strip = read_rgb_rows(path, top * CHUNK, (top + rows) * CHUNK, gw * CHUNK)
+        if strip.shape[:2] != (rows * CHUNK, gw * CHUNK):
+            continue
+        is_paved = np.zeros(strip.shape[:2], dtype=bool)
+        for colour in STREET_COLOURS:
+            is_paved |= same_colour(strip, colour)
+        is_water = same_colour(strip, C.WATER)
+        shape = (rows, CHUNK, gw, CHUNK)
+        paved[top:top + rows] = is_paved.reshape(shape).mean(axis=(1, 3))
+        water[top:top + rows] = is_water.reshape(shape).mean(axis=(1, 3))
+        del strip, is_paved, is_water
     return paved, water
 
 

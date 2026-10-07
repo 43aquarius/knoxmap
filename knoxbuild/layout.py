@@ -1333,7 +1333,7 @@ ROOM_CAP_PER = {
     # not one per six rooms: at a cap of 6 a 25-room floor came out with
     # four libraries. These are the rooms a building has exactly one of.
     "library": 40, "gym": 40, "kitchen": 40, "diningroom": 40,
-    "janitor": 40, "lobby": 40, "schoollab": 24, "schoolstorage": 24,
+    "lobby": 40, "schoollab": 24, "schoolstorage": 24,
     "sportstorage": 40,
     "bathroom": 10, "hall": 12,
     "breakroom": 25, "office": 12, "storage": 8, "garage": 15,
@@ -1345,6 +1345,10 @@ ROOM_CAP_PER = {
     "lobby_police": 30, "armory": 30, "lockerroom": 20,
     "policegunstorage": 30, "policeoutfitstorage": 30, "policelocker": 15,
     "policehall": 25, "firegarage": 12, "armystorage": 4, "medical": 4,
+    # janitor: this was written twice, 40 among the rooms above and 18 here, and the
+    # later one is the one that counted. Measured, the difference is small (a police
+    # station averages 2.4 of them at 18 and 2.1 at 40, a school gets next to none
+    # either way), so the live value stays rather than changing every existing map.
     "clinic": 4, "officestorage": 12, "janitor": 18,
     "security": 25,
     # A castle's chambers. Everything past the mix falls to the fill, and
@@ -4514,7 +4518,6 @@ def _pick_shaft(core: tuple[int, int, int, int], width: int, height: int,
         # Hall runs north-south: shafts to its west or east, doors in a W wall.
         mid = (cy0 + cy1) / 2
         for y0 in range(cy0, cy1 - s + 2):
-            landing = [(cx0, y0 + i) for i in range(s)] + [(cx1, y0 + i) for i in range(s)]
             for x0, door_x, side_col in ((cx0 - s, cx0, cx0), (cx1 + 1, cx1 + 1, cx1)):
                 if not inside(x0, y0):
                     continue
@@ -5282,7 +5285,6 @@ def _largest_rectangle(todo: list[list[bool]]) -> tuple[int, int, int, int] | No
         stack: list[int] = []
         for x in range(w + 1):
             cur = heights[x] if x < w else 0
-            start = x
             while stack and heights[stack[-1]] >= cur:
                 top = stack.pop()
                 left = stack[-1] + 1 if stack else 0
@@ -5290,7 +5292,6 @@ def _largest_rectangle(todo: list[list[bool]]) -> tuple[int, int, int, int] | No
                 if area > best_area:
                     best_area = area
                     best = (left, y - heights[top] + 1, x - left, heights[top])
-                start = left
             stack.append(x)
     return best
 

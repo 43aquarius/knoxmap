@@ -39,7 +39,7 @@ def _bmp_header(path: str):
     return width, abs(height), height > 0, bits, offset
 
 
-def _fast(path: str, bits_wanted: int, crop):
+def _fast(path: str, bits_wanted: int, crop, step: int = 1):
     hdr = _bmp_header(path)
     if hdr is None or hdr[3] != bits_wanted:
         return None
@@ -51,6 +51,25 @@ def _fast(path: str, bits_wanted: int, crop):
     out_h, out_w = height, width
     if crop is not None:
         out_h, out_w = min(crop[0], height), min(crop[1], width)
+    if step > 1:
+        # Every step-th pixel in each direction: a picture to look at, not to
+        # measure, so the full bitmap is never held.
+        rows = range(0, out_h, step)
+        cols = slice(0, out_w, step)
+        shape = (len(rows), len(range(0, out_w, step))) + ((3,) if bpp == 3 else ())
+        out = np.empty(shape, dtype=np.uint8)
+        raw = np.memmap(path, dtype=np.uint8, mode="r", offset=offset,
+                        shape=(height, stride))
+        try:
+            for n, y in enumerate(rows):
+                line = raw[height - 1 - y] if bottom_up else raw[y]
+                if bpp == 3:
+                    out[n] = line[:out_w * 3].reshape(out_w, 3)[cols][:, ::-1]
+                else:
+                    out[n] = line[:out_w][cols]
+        finally:
+            del raw
+        return out
     shape = (out_h, out_w, 3) if bpp == 3 else (out_h, out_w)
     out = np.empty(shape, dtype=np.uint8)
     raw = np.memmap(path, dtype=np.uint8, mode="r", offset=offset,
@@ -73,14 +92,17 @@ def _fast(path: str, bits_wanted: int, crop):
     return out
 
 
-def read_rgb(path: str, crop: tuple[int, int] | None = None) -> np.ndarray:
-    """The picture as a (height, width, 3) uint8 array. `crop` is (rows, cols)."""
-    arr = _fast(path, 24, crop)
+def read_rgb(path: str, crop: tuple[int, int] | None = None,
+             step: int = 1) -> np.ndarray:
+    """The picture as a (height, width, 3) uint8 array. `crop` is (rows, cols);
+    `step` keeps every step-th pixel, for a smaller picture of a big map."""
+    arr = _fast(path, 24, crop, step)
     if arr is not None:
         return arr
     with Image.open(path) as img:
         arr = np.array(img.convert("RGB"))
-    return arr[:crop[0], :crop[1]] if crop else arr
+    arr = arr[:crop[0], :crop[1]] if crop else arr
+    return arr[::step, ::step] if step > 1 else arr
 
 
 def read_gray(path: str, crop: tuple[int, int] | None = None) -> np.ndarray:
@@ -107,3 +129,70 @@ def same_colour(rgb: np.ndarray, colour) -> np.ndarray:
     mask &= rgb[:, :, 1] == g
     mask &= rgb[:, :, 2] == b
     return mask
+
+
+def cell_hashes(path: str, cell: int) -> dict[tuple[int, int], str]:
+    """A fingerprint of each cell x cell square of a picture, keyed (column, row).
+
+    For telling which squares of a big bitmap changed between two builds without
+    keeping the old bitmap: only the picture's bytes are read, a band of rows at
+    a time. Two pictures give the same fingerprint for a square exactly when
+    its pixels are the same. A square at the edge is just smaller.
+    """
+    import hashlib
+
+    out: dict[tuple[int, int], str] = {}
+    hdr = _bmp_header(path)
+    if hdr is not None and hdr[3] in (8, 24):
+        width, height, bottom_up, bits, offset = hdr
+        bpp = bits // 8
+        stride = (width * bpp + 3) // 4 * 4
+        if os.path.getsize(path) >= offset + stride * height:
+            raw = np.memmap(path, dtype=np.uint8, mode="r", offset=offset,
+                            shape=(height, stride))
+            try:
+                for cy, y0 in enumerate(range(0, height, cell)):
+                    y1 = min(y0 + cell, height)
+                    band = raw[height - y1:height - y0] if bottom_up else raw[y0:y1]
+                    for cx, x0 in enumerate(range(0, width, cell)):
+                        part = band[:, x0 * bpp:min(x0 + cell, width) * bpp]
+                        out[(cx, cy)] = hashlib.blake2b(
+                            np.ascontiguousarray(part).tobytes(), digest_size=12).hexdigest()
+            finally:
+                del raw
+            return out
+    with Image.open(path) as img:
+        arr = np.array(img.convert("RGB"))
+    for cy, y0 in enumerate(range(0, arr.shape[0], cell)):
+        for cx, x0 in enumerate(range(0, arr.shape[1], cell)):
+            out[(cx, cy)] = hashlib.blake2b(
+                np.ascontiguousarray(arr[y0:y0 + cell, x0:x0 + cell]).tobytes(),
+                digest_size=12).hexdigest()
+    return out
+
+
+def read_rgb_rows(path: str, top: int, bottom: int, width: int | None = None) -> np.ndarray:
+    """Rows top..bottom (exclusive) of the picture, as a (rows, width, 3) array.
+
+    For working down a big bitmap a strip at a time: only that strip is read,
+    where opening the picture and converting it holds all of it, twice."""
+    hdr = _bmp_header(path)
+    if hdr is not None and hdr[3] == 24:
+        w, height, bottom_up, _bits, offset = hdr
+        bottom = min(bottom, height)
+        top = max(0, min(top, bottom))
+        cols = min(width, w) if width else w
+        stride = (w * 3 + 3) // 4 * 4
+        if os.path.getsize(path) >= offset + stride * height:
+            raw = np.memmap(path, dtype=np.uint8, mode="r", offset=offset,
+                            shape=(height, stride))
+            try:
+                band = raw[height - bottom:height - top][::-1] if bottom_up else raw[top:bottom]
+                return np.ascontiguousarray(
+                    band[:, :cols * 3].reshape(bottom - top, cols, 3)[:, :, ::-1])
+            finally:
+                del raw
+    with Image.open(path) as img:
+        w, h = img.size
+        cols = min(width, w) if width else w
+        return np.array(img.convert("RGB").crop((0, top, cols, min(bottom, h))))

@@ -681,6 +681,27 @@ def folder_name(title: str, fallback: str) -> str:
     return safe or fallback
 
 
+def _clear_folder(folder: str, tries: int = 4) -> None:
+    """Remove a folder, or say it could not be.
+
+    A file the game has open cannot be deleted on Windows. rmtree() with errors
+    ignored then left the old cells where they were, the new ones were copied
+    in beside them, and the result is the mix of two builds this clearing is
+    here to prevent. Better to stop and say why than to install that."""
+    import time
+
+    for attempt in range(tries):
+        shutil.rmtree(folder, ignore_errors=True)
+        if not os.path.exists(folder):
+            return
+        time.sleep(0.5 * (attempt + 1))
+    left = sorted(os.listdir(folder))[:3] if os.path.isdir(folder) else []
+    raise RuntimeError(
+        f"The old copy of this map in {folder} could not be removed"
+        f"{' (still there: ' + ', '.join(left) + ')' if left else ''}. Close Project "
+        f"Zomboid, and anything else showing that folder, then install again.")
+
+
 def package(project_dir: str, name: str, mod_id: str,
             lots_dir: str | None = None, mods_dir: str | None = None,
             description: str = "") -> tuple[str, int, list[str]]:
@@ -706,7 +727,7 @@ def package(project_dir: str, name: str, mod_id: str,
     # on the way in. Nothing in here is written by anything but this, so it
     # all goes.
     if os.path.isdir(map_dir):
-        shutil.rmtree(map_dir, ignore_errors=True)
+        _clear_folder(map_dir)
     os.makedirs(map_dir, exist_ok=True)
 
     for src in cells + extras:

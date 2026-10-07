@@ -82,6 +82,16 @@
       <ul class="setup-list" id="setupList"></ul>
     </section>
 
+    <section class="panel" id="healthCard">
+      <details id="healthPanel">
+        <summary>Check my setup</summary>
+        <p class="hint">What is installed, what this PC can hold, and whether the
+          OpenStreetMap servers are answering.</p>
+        <button id="healthBtn" class="btn btn-small" type="button">Check now</button>
+        <div id="healthOut"></div>
+      </details>
+    </section>
+
     <section class="panel" id="mapsCard" hidden>
       <details id="mapsPanel">
         <summary>Your maps <span class="count" id="mapsCount"></span></summary>
@@ -93,6 +103,21 @@
 
     <section class="panel" data-card="area">
       <h2>1. Area</h2>
+      <details id="presetsPanel" class="presets">
+        <summary>Saved areas <span class="count" id="presetsCount"></span></summary>
+        <p class="hint">Keep the area you have drawn, with its scale and settings,
+          under a name, and bring it back later.</p>
+        <div class="preset-row">
+          <select id="presetList" aria-label="Saved areas"></select>
+          <button id="presetLoad" class="btn btn-small" type="button">Load</button>
+          <button id="presetDelete" class="btn btn-small" type="button">Delete</button>
+        </div>
+        <div class="preset-row">
+          <input type="text" id="presetName" maxlength="60" placeholder="Name for this area">
+          <button id="presetSave" class="btn btn-small" type="button">Save</button>
+        </div>
+        <div id="presetNote" class="hint"></div>
+      </details>
       <div class="coords">
         <label>S <input type="number" step="0.000001" id="south" readonly></label>
         <label>W <input type="number" step="0.000001" id="west"  readonly></label>
@@ -202,6 +227,17 @@
         <div class="pipe-title">3. Buildings</div>
         <span id="buildingsNote" class="step-note">Makes a furnished building for every footprint.</span>
         <div class="bar bar-indet"><div class="bar-fill"></div></div>
+        <div id="layoutPreview" class="layout-preview" hidden>
+          <div class="census-head">What was built
+            <select id="layoutLayer" aria-label="Layout view">
+              <option value="kinds">buildings by use</option>
+              <option value="zombies">zombie density</option>
+            </select>
+          </div>
+          <a id="layoutLink" target="_blank" rel="noopener"><img id="layoutImg" alt="Layout preview"/></a>
+          <div class="step-note">Check the mix and the zombies here before compiling.
+            Change a setting and build again if it looks wrong.</div>
+        </div>
         <div id="census" class="census" hidden>
           <div class="census-head">Population</div>
           <div class="tiles census-tiles" id="censusTiles"></div>
@@ -223,6 +259,8 @@
           Takes a few minutes.</span>
         <div class="bar"><div id="compileBar" class="bar-fill"></div></div>
         <button id="retryCellsBtn" class="btn btn-small" hidden>Compile the cells that failed</button>
+        <label class="hint compile-fresh"><input type="checkbox" id="compileFresh">
+          Start from scratch (throw away what is already compiled)</label>
         <details class="manual-fallback">
           <summary>Or do it yourself in WorldEd</summary>
           <button id="worldedBtn" class="btn btn-small" disabled>Open in WorldEd</button>

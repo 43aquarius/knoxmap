@@ -1,5 +1,89 @@
 # Changelog
 
+## Unreleased
+
+- **Building again is repeatable, and only lays out what changed**
+  (`knoxbuild/tbx.py`, `knoxbuild/build.py`). Two builds of one map used to
+  differ in every building's floors and trim: the seeds were `hash()` of a
+  string, which Python randomises per process. They are now a CRC. A second
+  bug of the same family: `tbx.py` compared a style's own wall by identity, which
+  never held in a worker process (it gets a copy), so a build in workers chose
+  differently from one in a single process. With both fixed a building's file is
+  a function of its inputs, so the last build is kept in `build_cache.json` and
+  a rebuild lays out only buildings whose inputs changed: 2,292 buildings, 77 s
+  to 35 s, with every file byte-identical to a full build. A build that stops
+  half way deletes the cache first, so it can never vouch for the wrong files.
+
+- **Compile only what changed** (`tools/compile_state.py`,
+  `tools/compile_map.py`). After a clean compile KnoxMap records a fingerprint
+  of what each 300-tile cell was compiled from (ground, vegetation, spawn map,
+  the cell's buildings and the .tbx files they point at). Next time cells that
+  are unchanged keep their lots, and only batches that would write a missing lot
+  file are started - starting WorldEd loads the tile catalogue, a minute or more
+  each. Any change to the ground makes the first batch convert every map again,
+  because WorldEd's BMP to TMX does not make up a partial set. Checked against a
+  from-scratch compile: three edits in different parts of a 24 x 16 cell map
+  ran 9 of 24 batches in 613 s against 1,249 s, and all 1,653 lot files were
+  byte-identical (`tools/compile_verify_incremental.py`). "Start from scratch"
+  under Compile throws everything away first.
+
+- **The compile eases off when WorldEd starts failing, and says how long is
+  left** (`tools/compile_map.py`). Six WorldEd processes at once on 8 cores and
+  32 GB made it fail with "Error Loading Image". A failure while others are
+  running now takes one slot (never below one, and not again for 90 s). The
+  window shows the time left once a few batches have set the pace, and when it
+  eased off. Generate buildings shows its stage as it goes.
+
+- **A picture of what was built, before the compile** (`knoxbuild/layout_preview.py`).
+  Buildings coloured by use, or the zombie spawn density, drawn from files the
+  build already wrote, in about half a second.
+
+- **Check my setup** and **Saved areas** (`app.py`, `static/js/app.js`).
+  The first lists what is installed, what this PC can hold (free memory as
+  square kilometres to draw and to build, free disk, compile batches at a time)
+  and whether the OpenStreetMap servers answer. The second keeps an area with its
+  scale and settings under a name (`presets.json`).
+
+- **`tools/compile_repeatable.py`** compiles the same batches twice and compares
+  the lots: WorldEd gives the same files from one run to the next. Lots made by an
+  older compile can still differ from a fresh one in places, which is why
+  `compile_verify_incremental.py` builds its own baseline.
+
+- **Odd data no longer stops a map** (`generator/osm.py`, `generator/renderer.py`,
+  `generator/structures.py`, `knoxbuild/build.py`, `knoxbuild/footprint.py`).
+  Found by feeding the pipeline thousands of maps with malformed answers and odd
+  tag values. A `null` point or missing field in an Overpass answer failed the
+  whole tile; `building:levels`, `height`, `roof:levels`, `min_height`, `layer`,
+  `population` set to `inf`, `Infinity` or `1e999` raised outside any handler,
+  `width=" "` raised an `IndexError`, and `width=nan` drew a 30 m road. Each is now
+  skipped or read as unset.
+
+- **A damaged cache or settings file is no longer a failed map**
+  (`generator/osm.py`, `knoxpaths.py`). A download cut short by a crash raised
+  `EOFError`, which the cache loader did not catch; caches are now written whole
+  through a temporary file and a bad one is a miss. `knoxmap_config.json` is
+  written the same way under a lock, and a file that is not an object reads as no
+  settings: written in place, a crash left a cut-short file, which read as empty,
+  and the next save wrote back only its one key, losing the game's folder.
+
+- **Big polygons cannot stall a build** (`knoxbuild/build.py`, `knoxbuild/props.py`).
+  Car parks, churchyards and military bases walked their polygon's whole bounding
+  box and threw away what was off the map. A military range mapped as one polygon
+  is a hundred kilometres across: hours. They now walk only the part on the map.
+
+- **Installing over a map that cannot be removed says so** (`tools/make_map_mod.py`),
+  where it used to copy the new cells in beside the old ones; **an update that fails
+  part way puts back the files it had replaced** (`updater.py`); and one that GitHub
+  published no fingerprint for says so in the log.
+
+- Smaller: `/api/generate` with a map name that is not text, and `/api/client-error`
+  with a body that is not an object, answered 500; a generate that failed at the
+  download left an empty folder in `output/`; a footprint of fewer than three points
+  raised instead of being "small"; the ground shares behind the zombie map were read
+  from a whole converted copy of the bitmap (8.7 s and gigabytes on a big map, now
+  2 s and 33 MB, same answer); `ROOM_CAP_PER` listed `janitor` twice, and dead
+  variables went from the lift-shaft and largest-rectangle code.
+
 ## 1.5.2
 
 - **Big maps no longer fail Generate buildings with "exceeds limit of 178956970
