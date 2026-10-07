@@ -224,6 +224,12 @@ OVERPASS_FILTERS: Sequence[str] = (
     # buildings
     'way["building"]',
     'relation["building"]',
+    # Real interiors. Where a mapper drew the rooms inside a building, the
+    # generated floor plan follows those walls instead of guessing (renderer
+    # attaches them to the building, knoxbuild/layout cuts along them).
+    # Rooms are only drawn in public and commercial buildings - schools,
+    # hospitals, offices - so the payload is small next to the buildings.
+    'way["indoor"~"^(room|corridor)$"]',
     # What the ground between buildings is used for. Without these a factory
     # yard, a schoolyard and a back garden all came out as the same wild grass,
     # which is most of why a generated town looked like nowhere in particular.
@@ -272,7 +278,7 @@ OVERPASS_FILTERS: Sequence[str] = (
 
 # Bumped whenever the filters above change, so a cached download made with
 # the old list is fetched again instead of silently lacking the new features.
-FILTERS_VERSION = 12
+FILTERS_VERSION = 13
 
 
 @dataclass
@@ -860,9 +866,11 @@ def _points(geometry) -> list[tuple[float, float]]:
     out = []
     for p in geometry or []:
         try:
-            out.append((float(p["lat"]), float(p["lon"])))
+            lat, lon = float(p["lat"]), float(p["lon"])
         except (TypeError, KeyError, ValueError):
             continue
+        if math.isfinite(lat) and math.isfinite(lon):     # "nan" is a float to float()
+            out.append((lat, lon))
     return out
 
 

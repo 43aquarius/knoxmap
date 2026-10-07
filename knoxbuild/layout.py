@@ -619,6 +619,107 @@ def _split(x0: int, y0: int, x1: int, y1: int, rng: random.Random,
         _split(x0, cut, x1, y1, rng, depth - 1, out, target_area, mask)
 
 
+def _subtract(box: tuple, others: list[tuple]) -> list[tuple]:
+    """`box` minus every rectangle in `others`, as non-overlapping rects.
+
+    Guillotine cuts: the part of `box` left after each rectangle in `others`
+    is taken out of it is up to four smaller rectangles, which is exactly the
+    kind of thing the rest of this module can work with.
+    """
+    pieces = [box]
+    for ox0, oy0, ox1, oy1 in others:
+        nxt = []
+        for x0, y0, x1, y1 in pieces:
+            if ox1 < x0 or x1 < ox0 or oy1 < y0 or y1 < oy0:
+                nxt.append((x0, y0, x1, y1))
+                continue
+            if x0 < ox0:
+                nxt.append((x0, y0, ox0 - 1, y1))
+            if ox1 < x1:
+                nxt.append((ox1 + 1, y0, x1, y1))
+            mx0, mx1 = max(x0, ox0), min(x1, ox1)
+            if y0 < oy0:
+                nxt.append((mx0, y0, mx1, oy0 - 1))
+            if oy1 < y1:
+                nxt.append((mx0, oy1 + 1, mx1, y1))
+        pieces = nxt
+        if not pieces:
+            break
+    return pieces
+
+
+def _intersect(box: tuple, others: list[tuple]) -> list[tuple]:
+    """The parts of `box` lying in `others`: one rect per rectangle it meets."""
+    x0, y0, x1, y1 = box
+    out = []
+    for ox0, oy0, ox1, oy1 in others:
+        ix0, iy0 = max(x0, ox0), max(y0, oy0)
+        ix1, iy1 = min(x1, ox1), min(y1, oy1)
+        if ix0 <= ix1 and iy0 <= iy1:
+            out.append((ix0, iy0, ix1, iy1))
+    return out
+
+
+def _mapped_rooms(plan: Plan, rng: random.Random,
+                  mapped: list[tuple[list[tuple[int, int]], str | None]],
+                  target_area: int, mask: list[list[bool]] | None,
+                  small: list[bool] | None) -> None:
+    """Rooms where the mapper drew them, the rest of the floor cut as usual.
+
+    `mapped` is [(ring, kind)] in this storey's tiles: the indoor=room ways
+    from OpenStreetMap, attached to their building (renderer._buildings_geojson)
+    and carried with the footprint (knoxbuild.build). A building whose rooms
+    are surveyed has a plan worth keeping - a school's classrooms along its
+    corridor, an office's rooms round its core - and cutting it with the
+    ordinary BSP ignored all of it and guessed.
+
+    The plan is rectangles, so each room arrives as its bounding box, biggest
+    first; one landing on rooms already placed keeps only the part of itself
+    that is still free, and whatever floor is left over is cut by _split just
+    as it would have been - the storey still tiles whole. A ring carrying a
+    room tag the game knows becomes a fixed room of that kind; the rest keep
+    their geometry and are assigned kinds after painting, as every other room
+    is.
+    """
+    w, h = plan.width, plan.height
+    boxes = []
+    for pts, kind in mapped:
+        if len(pts) < 3:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        bx0, bx1 = max(0, min(xs)), min(w - 1, max(xs))
+        by0, by1 = max(0, min(ys)), min(h - 1, max(ys))
+        if bx1 - bx0 + 1 < MIN_ROOM or by1 - by0 + 1 < MIN_ROOM:
+            continue            # too small to stand in, once on our grid
+        if _inside(bx0, by0, bx1, by1, mask) < MIN_ROOM * MIN_ROOM:
+            continue            # almost all of it outside the real footprint
+        boxes.append((kind, bx0, by0, bx1, by1))
+    # Biggest first: a small room's box fits into what the big ones leave far
+    # more often than the other way round.
+    boxes.sort(key=lambda b: -((b[3] - b[1] + 1) * (b[4] - b[2] + 1)))
+    free = [(0, 0, w - 1, h - 1)]
+    for kind, bx0, by0, bx1, by1 in boxes:
+        # What of this box is still floor no mapped room has taken.
+        pieces = _intersect((bx0, by0, bx1, by1), free)
+        if not pieces:
+            continue
+        best = max(pieces, key=lambda r: (r[2] - r[0] + 1) * (r[3] - r[1] + 1))
+        bw, bh = best[2] - best[0] + 1, best[3] - best[1] + 1
+        if bw < MIN_ROOM or bh < MIN_ROOM or bw * bh < MIN_ROOM * MIN_ROOM:
+            continue
+        plan.rooms.append(Room(*best, kind=kind or "hall", fixed=bool(kind)))
+        next_free = []
+        for frag in free:
+            next_free.extend(_subtract(frag, [best]))
+        free = next_free
+        if not free:
+            return
+    for rect in free:
+        _split(*rect, rng, MAX_DEPTH, plan.rooms, target_area=target_area,
+               mask=mask, small=small)
+
+
 # What a flat contains, by how many rooms it got. The first entry goes to the
 # room the front door opens into; the rest are handed out biggest-first, so the
 # bathroom lands on the smallest room.
@@ -1132,9 +1233,13 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
     """
     rng = rng or random.Random(plan.width * 31 + plan.height)
     adj = _neighbours(plan)
-    free = [i for i, r in enumerate(plan.rooms, 1) if not r.is_core]
+    # A room the mapper drew with a kind of its own keeps it; only the rest
+    # are dealt out, and whatever is left out of that is a core, hence the
+    # hall below.
+    free = [i for i, r in enumerate(plan.rooms, 1)
+            if not r.is_core and not r.fixed]
     for i, room in enumerate(plan.rooms, 1):
-        if i not in free:
+        if i not in free and not room.fixed:
             room.kind = "hall"
     if not free:
         return
@@ -1510,6 +1615,8 @@ def _assign_kinds(rooms: list[Room], mix: list[str], fill: list[str]) -> None:
         return per is None or used[kind] < max(1, total // per)
 
     for i, room in enumerate(order):
+        if room.fixed:
+            continue        # the kind the mapper gave this room stands
         if i < len(mix):
             kind = mix[i]
         else:
@@ -1536,12 +1643,16 @@ def _assign_kinds(rooms: list[Room], mix: list[str], fill: list[str]) -> None:
         used[kind] += 1
     # The smallest room makes a far more convincing bathroom than a hall. It
     # trades kinds with whatever the mix made the bathroom rather than adding
-    # one, or a nine-room church came out with two lavatories in it.
-    if len(order) >= 3 and "bathroom" in mix and order[-1].kind != "bathroom":
-        swap = next((r for r in order if r.kind == "bathroom"), None)
+    # one, or a nine-room church came out with two lavatories in it. Fixed
+    # rooms - drawn with a kind of their own - are neither moved into nor out
+    # of: the smallest one the mix still owns takes the trade.
+    swappable = [r for r in order if not r.fixed]
+    if len(order) >= 3 and "bathroom" in mix and swappable \
+            and swappable[-1].kind != "bathroom":
+        swap = next((r for r in swappable if r.kind == "bathroom"), None)
         if swap is not None:
-            swap.kind = order[-1].kind
-        order[-1].kind = "bathroom"
+            swap.kind = swappable[-1].kind
+        swappable[-1].kind = "bathroom"
 
 
 # Buildings you walk through to get somewhere else. A school of classrooms
@@ -4771,7 +4882,8 @@ def build_building(width: int, height: int, levels: int = 1,
                    hotel: bool = False,
                    party: dict | None = None,
                    entrances: list[tuple[float, float, dict]] | None = None,
-                   profile: object | None = None) -> Building:
+                   profile: object | None = None,
+                   mapped: list | None = None) -> Building:
     """Lay out a building of `levels` storeys.
 
     `retail` puts shops on the ground floor of a block of flats, as on any
@@ -4847,7 +4959,7 @@ def build_building(width: int, height: int, levels: int = 1,
                    corridor=corridor, shaft=shaft, shaft_door=shaft_door,
                    street=street, uses=uses, hotel=hotel,
                    entrances=entrances if lvl == 0 else None,
-                   profile=profile,
+                   profile=profile, mapped=mapped,
                    party={e for e, up in (party or {}).items() if lvl < up})
         for lvl in range(levels)
     ]
@@ -5062,11 +5174,15 @@ def build_plan(width: int, height: int, commercial: bool = False,
                hotel: bool = False,
                party: set | None = None,
                entrances: list[tuple[float, float, dict]] | None = None,
-               profile: object | None = None) -> Plan:
+               profile: object | None = None,
+               mapped: list | None = None) -> Plan:
     """Lay out and furnish one storey of the given tile size.
 
     `uses` are what OpenStreetMap says a commercial ground floor holds
     (build_building); `hotel` turns flats into hotel rooms.
+    `mapped` are the rooms the mapper drew inside the building, as (ring,
+    kind) in storey tiles: on the ground floor they are cut as they were
+    drawn (_mapped_rooms), the floors above laid out as ever.
 
     `ground` gates the exterior door: a door in an upper-floor wall opens onto
     a five-metre drop, and the game will happily let a zombie walk through it.
@@ -5104,8 +5220,15 @@ def build_plan(width: int, height: int, commercial: bool = False,
         # it and is left alone.
         house_floor = not (shop_floor or commercial
                            or (mix_kind and mix_kind in SPECIAL_MIXES))
-        _split(0, 0, width - 1, height - 1, rng, MAX_DEPTH, plan.rooms,
-               target_area=target, mask=mask, small=[house_floor])
+        if mapped and ground:
+            # The rooms OpenStreetMap has for this building, on the floor the
+            # mapper drew them for; the rest of that floor and every floor
+            # above is cut as it always was.
+            small = [house_floor]
+            _mapped_rooms(plan, rng, mapped, target, mask, small)
+        else:
+            _split(0, 0, width - 1, height - 1, rng, MAX_DEPTH, plan.rooms,
+                   target_area=target, mask=mask, small=[house_floor])
     _paint(plan)
 
     # Kinds are chosen after painting, from the plan as it really is: what a
@@ -5137,7 +5260,7 @@ def build_plan(width: int, height: int, commercial: bool = False,
             _merge_concourse(plan)
             _atrium_railings(plan)
     elif commercial:
-        rooms = [r for r in plan.rooms if not r.is_core]
+        rooms = [r for r in plan.rooms if not r.is_core and not r.fixed]
         _assign_kinds(rooms, COMMERCIAL, COMMERCIAL_FILL)
         _circulation(plan, rooms)
     else:

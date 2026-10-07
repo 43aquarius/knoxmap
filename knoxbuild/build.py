@@ -224,6 +224,32 @@ SHOP_FRONTAGE_M = 13.0
 # mappers use them.
 TERRACE_TAGS = {"terrace", "terraced", "semidetached_house", "row_house"}
 
+# OpenStreetMap room= and amenity= values the game furnishes under a name of
+# their own. Rooms a mapper drew inside a building (indoor=room) arrive with
+# their tags, and where the tag names something Knox County knows, the room is
+# built as that instead of guessed from its size (layout._mapped_rooms).
+MAPPED_ROOM_KINDS = {
+    "bedroom": "bedroom",
+    "bathroom": "bathroom",
+    "toilet": "bathroom",
+    "kitchen": "kitchen",
+    "living_room": "livingroom",
+    "corridor": "hall",
+    "hallway": "hall",
+    "hall": "hall",
+    "lobby": "lobby",
+    "classroom": "classroom",
+    "office": "office",
+    "storage": "storage",
+    "utility": "storage",
+    "laundry": "laundry",
+    "closet": "closet",
+    "wardrobe": "closet",
+    "library": "library",
+    "laboratory": "schoollab",
+    "stairs": "hall",
+}
+
 
 # And a building too big to be one building whatever it is.
 #
@@ -233,23 +259,45 @@ TERRACE_TAGS = {"terrace", "terraced", "semidetached_house", "row_house"}
 # out. Past this it is cut into blocks that stand wall to wall, which is what
 # a shopping centre or a works of that size is anyway.
 BIG_BUILDING_M2 = 6000.0
+# A footprint past settings.max_size is kept and cut into units instead of
+# dropped, but not without limit: a polygon this many tiles in area (about a
+# square kilometre at one metre a tile) comes to hundreds of units, each laid
+# out as a building of its own, and is a campus or an airfield mapped as one
+# building rather than a building. Past it the old answer stands: left out.
+MAX_OVERSIZE_TILES = 1_200_000
 
 
-def _cut_big(units: list, metres_per_tile: float) -> list:
-    """Cut anything left that is still too big to be one building."""
+def _cut_big(units: list, metres_per_tile: float,
+             max_side: int | None = None) -> list:
+    """Cut anything left that is still too big to be one building.
+
+    `max_side`, passed only for a footprint placed past settings.max_size
+    (build.py, the "large" retry), is a hard cap on either side: the gate
+    that used to throw such a building away no longer ran, so it is cut down
+    to what the gate would have allowed instead. split_row leaves a piece
+    whole when round(length / unit) comes to 1, so the cut target is 2/3 of
+    the cap - a side over the cap is then always over 1.5 targets, which
+    always divides, and every piece lands inside the cap.
+    """
     import math
 
     from .footprint import split_row
 
     side = max(8, int(math.sqrt(BIG_BUILDING_M2) / max(0.05, metres_per_tile)))
     limit = side * side
+    cut = side if max_side is None else min(side, max(4, (2 * max_side) // 3))
+
+    def needs_cut(u) -> bool:
+        return (u.width * u.height > limit
+                or (max_side is not None and max(u.width, u.height) > max_side))
+
     out = list(units)
     for _ in range(4):
-        if all(u.width * u.height <= limit for u in out):
+        if all(not needs_cut(u) for u in out):
             break
         nxt = []
         for u in out:
-            nxt.extend(split_row(u, side) if u.width * u.height > limit else [u])
+            nxt.extend(split_row(u, cut) if needs_cut(u) else [u])
         if len(nxt) == len(out):
             break
         out = nxt
@@ -257,20 +305,25 @@ def _cut_big(units: list, metres_per_tile: float) -> list:
 
 
 def row_units(fp, special: str | None, btag: str, n_uses: int,
-              metres_per_tile: float):
-    """One footprint per unit of a row, or the footprint as it stands."""
+              metres_per_tile: float, max_side: int | None = None):
+    """One footprint per unit of a row, or the footprint as it stands.
+
+    `max_side` (see _cut_big) is passed only for a footprint that was too
+    wide for settings.max_size and placed anyway, to be cut into units that
+    fit rather than dropped.
+    """
     from .footprint import split_row
 
     if special not in ROW_KINDS and btag not in TERRACE_TAGS:
-        return _cut_big([fp], metres_per_tile)
+        return _cut_big([fp], metres_per_tile, max_side)
     long_side = max(fp.width, fp.height) * metres_per_tile
     short_side = min(fp.width, fp.height) * metres_per_tile
     if short_side < ROW_MIN_DEPTH_M or long_side < ROW_MIN_LENGTH_M:
-        return _cut_big([fp], metres_per_tile)
+        return _cut_big([fp], metres_per_tile, max_side)
     terrace = btag in TERRACE_TAGS
     if not terrace:
         if short_side > ROW_MAX_DEPTH_M or long_side < short_side * ROW_RATIO:
-            return _cut_big([fp], metres_per_tile)
+            return _cut_big([fp], metres_per_tile, max_side)
     frontage = UNIT_FRONTAGE_M.get(special or "house", SHOP_FRONTAGE_M)
     if n_uses > 1:
         # The shops mapped inside it say how many units there really are;
@@ -278,7 +331,7 @@ def row_units(fp, special: str | None, btag: str, n_uses: int,
         # two units of fifty metres.
         frontage = min(max(frontage, long_side / n_uses), frontage * 2)
     return _cut_big(split_row(fp, max(5, int(round(frontage / metres_per_tile)))),
-                    metres_per_tile)
+                    metres_per_tile, max_side)
 
 
 # Kinds with no walls and windows of their own (knoxbuild/catalog.py
@@ -891,6 +944,41 @@ def _entrances_by_unit(entrances: list[tuple[float, float, dict]], units
     return assigned
 
 
+def _rooms_by_unit(entries, fp, units, proj) -> list:
+    """The building's mapped rooms (renderer._buildings_geojson), moved with
+    the placed footprint and shared out between the units it was cut into.
+
+    Returns one list per unit of (ring, kind): the ring in that unit's own
+    tiles, kind from the OSM room tag where the game knows it (None = cut as
+    drawn but furnished by the usual rules). A room whose centre falls in no
+    unit - outside the footprint after squaring up - is left out.
+    """
+    out: list = [[] for _ in units]
+    if not entries:
+        return out
+    turned = fp.point_rotation or fp.point_offset != (0.0, 0.0)
+    for entry in entries:
+        ring = entry.get("ring") or []
+        if len(ring) < 3:
+            continue
+        pts = [proj.to_px(lat, lon) for lon, lat in ring]
+        if turned:
+            pts = [fp.transform_point(x, y) for x, y in pts]
+        room = str(entry.get("room") or "").strip().lower()
+        amenity = str(entry.get("amenity") or "").strip().lower()
+        kind = MAPPED_ROOM_KINDS.get(room) or MAPPED_ROOM_KINDS.get(amenity)
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        for n, unit in enumerate(units):
+            if unit.x0 <= cx < unit.x0 + unit.width \
+                    and unit.y0 <= cy < unit.y0 + unit.height:
+                local = [(int(round(x - unit.x0)), int(round(y - unit.y0)))
+                         for x, y in pts]
+                out[n].append((local, kind))
+                break
+    return out
+
+
 def _party_walls(owner: np.ndarray, me: int, x0: int, y0: int, mask: np.ndarray,
                  levels: list[int]) -> dict:
     """{(x, y, "N" or "W"): storeys of the neighbour} for each outside wall
@@ -921,12 +1009,12 @@ def _make_one(job: tuple) -> tuple:
     furniture, error): a building that cannot be laid out is left out with the
     reason, instead of stopping the other two thousand."""
     (w, h, levels, commercial, seed, kind, mask, settings, style, label, path, street, retail,
-        uses, hotel, entrances, profile, party) = job
+        uses, hotel, entrances, profile, mapped, party) = job
     try:
         plan = build_building(w, h, levels=levels, commercial=commercial, seed=seed,
                               kind=kind, mask=mask, settings=settings, street=street,
                               retail=retail, uses=uses, hotel=hotel, party=party,
-                              entrances=entrances, profile=profile)
+                              entrances=entrances, profile=profile, mapped=mapped)
         text = render_tbx(plan, label, style)
     except Exception:  # noqa: BLE001
         import traceback
@@ -1139,6 +1227,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     squared = 0    # buildings close enough to the grid to square up
     rows_split = 0   # rows of shops or terraces cut into their units
     units_made = 0   # and how many buildings those became
+    split_large = 0  # and buildings past max_size kept by cutting them
 
     areas = AreaIndex.load(out_dir, map_name, proj)
     points = _points_of_use(out_dir, info, map_name, proj)
@@ -1236,16 +1325,52 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     context = Context(proj.width, proj.height, surroundings, metres_per_tile,
                       road_hierarchy=road_hierarchy)
 
-    for placed_so_far, (_neg_area, i, px) in enumerate(order):
+    # The buildings past max_size are not placed with the rest: they are kept
+    # (below) but only after everything else has its ground. The order here is
+    # largest first, and an outline that claims its whole area before the
+    # buildings inside it are placed leaves them "taken" - a campus mapped as one
+    # building would lose every house and hall standing in it, where before it
+    # was simply left out and they all stayed. Placed last, it takes what is free.
+    deferred_large: list = []
+
+    def candidates():
+        for neg_area, idx, points in order:
+            yield neg_area, idx, points, False
+        for neg_area, idx, points in deferred_large:
+            yield neg_area, idx, points, True
+
+    for placed_so_far, (_neg_area, i, px, retry) in enumerate(candidates()):
         # Between buildings: nothing is written to disk until the whole run
         # is laid out, so stopping here costs only the time spent.
         if placed_so_far % 64 == 0:
             knoxstop.check(should_stop, "the buildings")
         feat = geo["features"][i]
-        fp, reason = place(px, occupied, min_side=min_size, max_side=max_size,
-                   snap_degrees=settings.square_buildings,
-                   avoid=road_weight, lots=lots,
-                   alignment=settings.building_alignment)
+        oversize = False
+        if retry:
+            # A building past max_size is not thrown away any more: the
+            # factory and the hangar are the landmarks a place is known by,
+            # and dropping them left a hole exactly where the eye looks. The
+            # gate measured the real building's long side, so it is tried
+            # again without that one gate (place claimed nothing before
+            # refusing) and cut into units that fit further down, in
+            # row_units - which is what it is anyway, works of that size
+            # being several blocks wall to wall.
+            fp, reason = place(px, occupied, min_side=min_size, max_side=1e9,
+                       snap_degrees=settings.square_buildings,
+                       avoid=road_weight, lots=lots,
+                       alignment=settings.building_alignment)
+            oversize = fp is not None
+        else:
+            fp, reason = place(px, occupied, min_side=min_size, max_side=max_size,
+                       snap_degrees=settings.square_buildings,
+                       avoid=road_weight, lots=lots,
+                       alignment=settings.building_alignment)
+            if fp is None and reason == "large":
+                if -_neg_area <= MAX_OVERSIZE_TILES:
+                    deferred_large.append((_neg_area, i, px))
+                else:
+                    skipped["large"] += 1
+                continue
         if fp is None:
             skipped[reason] += 1
             continue
@@ -1254,6 +1379,9 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
             squared += 1
 
         tags = feat.get("properties", {})
+        # Rooms the mapper drew inside it, if OSM has any for this building
+        # (renderer._buildings_geojson attaches them to their building).
+        mapped = feat.get("properties", {}).get("rooms") or []
         btag = (tags.get("building") or "").strip().lower()
         cx = x0 + w / 2
         cy = y0 + h / 2
@@ -1341,7 +1469,11 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # A row of shops or a terrace of houses is one polygon here; built as
         # one building it is the "uber building" players reported. Each unit
         # becomes its own building, standing wall to wall with the next.
-        units = row_units(fp, special, btag, len(uses), metres_per_tile)
+        units = row_units(fp, special, btag, len(uses), metres_per_tile,
+                          max_side=max_size if oversize else None)
+        if oversize:
+            split_large += 1
+        unit_mapped = _rooms_by_unit(mapped, fp, units, proj)
         placed_entrances = [(x, y, tags) for x, y, tags in entrance_points]
         if fp.point_rotation or fp.point_offset != (0.0, 0.0):
             placed_entrances = [(*fp.transform_point(x, y), tags)
@@ -1370,7 +1502,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                          # Shops under flats where the town is built up.
                          context.density(cx, cy) >= RETAIL_DENSITY,
                          # What the ground floor really is, and a hotel's rooms.
-                         unit_uses, hotel, entrances_by_unit[n], profile))
+                         unit_uses, hotel, entrances_by_unit[n], profile,
+                         unit_mapped[n]))
             outline = px if len(units) == 1 else [
                 (ux0, uy0), (ux0 + uw, uy0), (ux0 + uw, uy0 + uh), (ux0, uy0 + uh)]
             decided.append((fname, label, ux0, uy0, uw, uh, unit, outline, special,
@@ -1573,7 +1706,11 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     print(f"footprints in geojson : {len(geo['features'])}")
     print(f"  shops, food, offices: {with_uses} buildings from the map's points and tags")
     print(f"  too small (<{min_size})     : {skipped['small']}")
-    print(f"  too large (>{max_size})   : {skipped['large']}")
+    if split_large:
+        print(f"  oversized (>{max_size})     : {split_large} kept, "
+              f"cut into units that fit")
+    else:
+        print(f"  too large (>{max_size})   : {skipped['large']}")
     print(f"  outside the map     : {skipped['outside']}")
     print(f"  swallowed by others : {skipped['taken']}")
     print(f"  not buildings       : {skipped['not a building']} (roofs, ruins, tanks)")

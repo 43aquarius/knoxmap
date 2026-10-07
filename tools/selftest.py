@@ -384,6 +384,113 @@ def check_dwellings(check) -> None:
           f"bathrooms, {beds / 12:.0f} bedrooms per building)")
 
 
+def check_split_large(check) -> None:
+    """A building past max_size is cut into units that fit, not dropped.
+
+    footprint.place refuses on the real polygon's long side before claiming
+    a single tile; build.py answers "large" by placing again without that
+    one gate and cutting the footprint down in row_units. The factory and
+    the hangar are the landmarks a place is known by, and dropping them
+    left a hole exactly where the eye looks.
+    """
+    import numpy as np
+
+    from knoxbuild.build import row_units
+    from knoxbuild.footprint import place
+
+    ring = [(10.0, 10.0), (510.0, 10.0), (510.0, 90.0), (10.0, 90.0),
+            (10.0, 10.0)]
+    fp, why = place(ring, np.zeros((600, 600), dtype=bool), max_side=200)
+    whole, why2 = place(ring, np.zeros((600, 600), dtype=bool), max_side=1e9)
+    # A quarter-metre a tile: the area rule stops before 200 tiles here, so
+    # only the cap can bring this footprint in (tests/test_split_large_buildings).
+    units = row_units(whole, "industrial", "industrial", 0, 0.25,
+                      max_side=200) if whole else []
+    longest = max((max(u.width, u.height) for u in units), default=0)
+    check(fp is None and why == "large" and whole is not None and why2 == "ok"
+          and len(units) > 1 and longest <= 200
+          and sum(u.tiles for u in units) == whole.tiles,
+          f"a building past max_size is cut into units that fit, not dropped "
+          f"({len(units)} units, longest side {longest})")
+
+
+def check_mapped_rooms(check) -> None:
+    """Rooms the mapper drew are the rooms the floor is cut into.
+
+    OSM indoor=room ways are attached to their building when the map is
+    rendered, moved with the placed footprint, and cut into the ground floor
+    (renderer._buildings_geojson, knoxbuild.build, layout._mapped_rooms) -
+    so a school surveyed room by room keeps its classrooms instead of the
+    BSP guessing. The rest of the floor and every floor above is cut as ever.
+    """
+    from knoxbuild.layout import build_plan
+
+    mapped = [([(2, 2), (9, 2), (9, 7), (2, 7), (2, 2)], "classroom"),
+              ([(13, 3), (18, 3), (18, 7), (13, 7), (13, 3)], "bathroom")]
+    plan = build_plan(40, 24, kind="civic", seed=5, mapped=mapped)
+    found = {(r.x0, r.y0, r.x1, r.y1): r.kind for r in plan.rooms}
+    covered = all(all(row) for row in plan.grid)
+    upper = build_plan(40, 24, kind="civic", seed=5, ground=False,
+                       mapped=mapped)
+    plain = build_plan(40, 24, kind="civic", seed=5, ground=False)
+    one_floor = ([(r.x0, r.y0, r.x1, r.y1, r.kind) for r in upper.rooms]
+                 == [(r.x0, r.y0, r.x1, r.y1, r.kind) for r in plain.rooms])
+    from knoxbuild.layout import MIN_ROOM
+
+    def drawn(rect, kind):
+        """A room of this kind that is the drawn one: it holds the rectangle, and
+        any more of it is a sliver too thin to be a room, merged in as every
+        such leftover is (two rows above the classroom here)."""
+        x0, y0, x1, y1 = rect
+        return any(r.kind == kind and r.x0 <= x0 and r.y0 <= y0 and r.x1 >= x1 and r.y1 >= y1
+                   and x0 - r.x0 < MIN_ROOM and y0 - r.y0 < MIN_ROOM
+                   and r.x1 - x1 < MIN_ROOM and r.y1 - y1 < MIN_ROOM for r in plan.rooms)
+
+    check(drawn((2, 2, 9, 7), "classroom") and drawn((13, 3, 18, 7), "bathroom")
+          and len(plan.rooms) > len(mapped) and covered and one_floor,
+          f"rooms the mapper drew are the floor's own rooms "
+          f"({len(plan.rooms)} rooms, kinds kept, upper floor untouched)")
+
+
+def check_giant_outline(check, work: str) -> None:
+    """A building past max_size is kept, and does not cost the buildings inside it.
+
+    Placed first (largest first), the giant outline claimed every tile in it and
+    the house standing inside came out "taken"; where 1.5.2 left the outline out
+    and kept the house. Outlines past max_size are placed after the rest."""
+    import csv
+
+    from generator import renderer
+    from knoxbuild.build import MAX_OVERSIZE_TILES, build
+    from knoxbuild.settings import Settings
+
+    def box(s, w, n, e):
+        return [(s, w), (s, e), (n, e), (n, w), (s, w)]
+
+    giant = box(SOUTH + 0.0004, WEST + 0.0004, SOUTH + 0.0044, WEST + 0.0064)    # ~440 x 480 m
+    house = box(SOUTH + 0.0022, WEST + 0.0030, SOUTH + 0.00245, WEST + 0.00335)  # ~28 x 21 m
+    feats = [OSMFeature(next(_ids), "way", {"building": "yes"}, giant),
+             OSMFeature(next(_ids), "way", {"building": "house"}, house)]
+    out = os.path.join(work, "giant")
+    renderer.render(feats, SOUTH, WEST, NORTH, EAST, meters_per_tile=1.0,
+                    output_dir=out, map_name="giant")
+    with contextlib.redirect_stdout(io.StringIO()):
+        build(out, settings=Settings(seed=1, true_map=1))
+    rows = list(csv.DictReader(open(os.path.join(out, "giant_placements.csv"), encoding="utf-8")))
+    proj = renderer.Projector.build(SOUTH, WEST, NORTH, EAST, 1.0)
+    hx, hy = proj.to_px(SOUTH + 0.002325, WEST + 0.003175)
+
+    def holds(r):
+        x, y, w, h = (int(r[k]) for k in ("tile_x", "tile_y", "width", "height"))
+        return x <= hx < x + w and y <= hy < y + h
+
+    inside = [r for r in rows if holds(r)]
+    check(len(rows) > 4, f"a building past max_size is kept, cut into units ({len(rows)} buildings)")
+    check(any(int(r["width"]) <= 40 and int(r["height"]) <= 40 for r in inside),
+          "and the house standing inside it is kept as well")
+    check(MAX_OVERSIZE_TILES > 0, "and there is a limit to how large an outline is kept")
+
+
 def check_street_zombies(check) -> None:
     """Zombies where the streets are, not only inside the buildings: a town
     mapped without its houses used to come out empty."""
@@ -2714,6 +2821,65 @@ def check_ground_shares(check, work: str) -> None:
           "and a strip of rows read from a bitmap is those rows of the picture")
 
 
+def check_street_angle(check) -> None:
+    """The angle a map is turned to is the grid on the map, found to a fraction of a degree."""
+    from generator import renderer
+
+    south, west, north, east = 40.0, 20.0, 40.02, 20.026
+    proj = renderer.Projector.build(south, west, north, east, 1.0)
+    ids = iter(range(1, 10 ** 6))
+
+    def street(p0, p1):
+        return renderer.OSMFeature(next(ids), "way", {"highway": "residential"},
+                                   [proj.to_latlon(*p0), proj.to_latlon(*p1)])
+
+    def clip(p0, p1, x0, y0, x1, y1):
+        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+        t0, t1 = 0.0, 1.0
+        for p, q in ((-dx, p0[0] - x0), (dx, x1 - p0[0]), (-dy, p0[1] - y0), (dy, y1 - p0[1])):
+            if p == 0:
+                if q < 0:
+                    return None
+            else:
+                t = q / p
+                t0, t1 = (max(t0, t), t1) if p < 0 else (t0, min(t1, t))
+        return None if t0 >= t1 else ((p0[0] + t0 * dx, p0[1] + t0 * dy), (p0[0] + t1 * dx, p0[1] + t1 * dy))
+
+    def grid(angle, x0, y0, x1, y1, spacing=60):
+        a = math.radians(angle)
+        u, v = (math.cos(a), -math.sin(a)), (math.sin(a), math.cos(a))
+        cx, cy, reach = (x0 + x1) / 2, (y0 + y1) / 2, max(x1 - x0, y1 - y0)
+        out = []
+        for k in range(-int(reach / spacing), int(reach / spacing) + 1):
+            for d, e in ((u, v), (v, u)):
+                o = (cx + e[0] * k * spacing, cy + e[1] * k * spacing)
+                seg = clip((o[0] - d[0] * reach, o[1] - d[1] * reach),
+                           (o[0] + d[0] * reach, o[1] + d[1] * reach), x0, y0, x1, y1)
+                if seg:
+                    out.append(street(*seg))
+        return out
+
+    def turned(feats):
+        return renderer.dominant_road_angle(feats, south, west, north, east)
+
+    w, h = proj.width, proj.height
+    errs = []
+    for ang in (3, 22.5, 44, -30):
+        got, strength = turned(grid(ang, 0, 0, w, h))
+        errs.append(abs(got - ang) < 0.5 and strength > 0.9)
+    check(all(errs), "a street grid is found to within half a degree, whichever way it runs")
+    two, _s = turned(grid(30, 0, 0, w * 0.65, h) + grid(0, w * 0.7, 0, w, h))
+    check(abs(two - 30) < 0.5, "and where two districts meet, the one with more street decides")
+    inside = grid(20, 0, 0, w, h)
+    both, _s = turned(inside + grid(0, -3000, -3000, -50, h + 3000))
+    check(abs(both - 20) < 0.5,
+          "a bigger grid in the margin beyond the map does not turn the map to its own angle")
+    from generator import osm as _osm
+    check(len(_osm._points([{"lat": float("nan"), "lon": 20.0}, {"lat": 1.0, "lon": 2.0}])) == 1,
+          "and a point with no real coordinates is dropped on the way in")
+    check(turned([]) == (0.0, 0.0), "a map with no streets has no angle")
+
+
 def check_throttle(check) -> None:
     """The compile eases off when WorldEd fails under load, and only so far."""
     import threading
@@ -3393,6 +3559,9 @@ def main(argv: list[str]) -> int:
         check_1_3_6(check, out, tbx, pzw_text, log.getvalue())
         check_street_zombies(check)
         check_dwellings(check)
+        check_split_large(check)
+        check_mapped_rooms(check)
+        check_giant_outline(check, work)
         check_stop(check)
         check_portable(check)
         texts = [open(p, encoding="utf-8").read() for p in tbx]
@@ -3645,6 +3814,7 @@ def main(argv: list[str]) -> int:
         check_car_park_stalls(check)
         check_prop_lattice(check)
         check_ground_shares(check, work)
+        check_street_angle(check)
         check_odd_requests(check, work)
         check_saved_areas(check, work)
         check_health(check)
