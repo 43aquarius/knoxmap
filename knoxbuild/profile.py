@@ -42,6 +42,7 @@ class BuildingProfile:
     setting: str
     wear: float
     seed: int
+    dated: bool = False
 
     @classmethod
     def infer(cls, tags: dict, kind: str | None, density: float,
@@ -60,6 +61,7 @@ class BuildingProfile:
             setting = "suburban"
 
         year = _year(tags)
+        dated = year is not None
         if year is None:
             if setting == "rural":
                 typical_age = 48
@@ -111,7 +113,7 @@ class BuildingProfile:
                  for key in ("abandoned", "disused", "vacant")):
             condition = max(condition, 0.78 if tags.get("abandoned") else 0.65)
 
-        return cls(year, age, era, wealth, setting, _clamp(condition), int(seed))
+        return cls(year, age, era, wealth, setting, _clamp(condition), int(seed), dated)
 
     def style_weight(self, name: str) -> float:
         style = name.lower()

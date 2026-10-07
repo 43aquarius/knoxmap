@@ -131,6 +131,61 @@ running along every street.
 This needed Knoxify's GeoJSON export widened: it previously kept only the
 `building` tag, which cannot tell a school from a shed.
 
+## Regional architecture (`knoxbuild/regional.py`)
+
+The material styles, storey counts and room plans above describe the game's
+own Kentucky. Most of the world does not build like Kentucky, and the
+starkest case is China: a Chinese city is masonry and render with flat
+roofs and a machine on every one of them, self-built houses of three and
+four storeys on narrow footprints, and walk-up blocks five to eight storeys
+tall - not weatherboard bungalows under pitched roofs with shutters.
+
+**Detection is by script, not by borders.** The build reads up to 800 of the
+map's own building names: Han ideographs alone mean Chinese-built (which
+covers Hong Kong, Taiwan and Singapore as naturally as Guangzhou), kana in
+the name marks it Japanese and hangul Korean whatever the Han in it, and
+anything else is built the default way. A town is only read as a region when
+at least six names are present and 30% of them agree, so a main street with
+three Chinese restaurants on it stays what it is. A map that names nothing -
+rural rectangles, in practice - falls back to its bounding box, with Korea
+and Japan tested before China's longitudes. The `arch_style` setting forces
+the question: `auto` (the default), `cn`, or `off` for the previous
+behaviour everywhere.
+
+**A regional style is a shipped style, rearranged.** The Chinese house pool
+is the catalog's own render, painted, stucco, panel and brick entries with
+`peaked` set to false and the shutters taken off - every wall, window, door,
+trim and grime tile is one the catalog already shipped, so a regional build
+cannot reference a tile the game has not got. The rooftop machinery that
+flat roofs already carry (the AC units, vents and hatch from
+`knoxbuild/tbx.py`) lands on them as on any flat roof. The wood-and-siding
+styles - clapboard, logs, timber, trailer, the coloured sidings - are simply
+not in the pool. Special buildings keep their own styles; apartment, shop,
+civic, school and industrial styles are flat-roofed to begin with, and a
+church keeps its pitched roof in China as anywhere, because a temple is the
+one thing on a Chinese street that has one.
+
+**Dated buildings are exempt.** A building the mapper dated - `start_date`,
+`historic`, `heritage`, an architecture tag - and that predates 1945 keeps
+its pitched roof and era materials rather than the regional pool. The
+`BuildingProfile` now records whether its era came from the mapper or from
+the age dice, so a lucky young house does not pass itself off as heritage;
+only the genuinely dated ones keep the exemption.
+
+**Storeys, when OSM says nothing, come from the kind and the footprint
+together** - the approach Arnis (github.com/louis-e/arnis) takes for
+Minecraft, re-based to one storey per level. The tables in
+`knoxbuild/regional.py` map each kind and floor-area band (in real square
+metres, so the answer holds at any map scale) to a weighted pool of storey
+counts: a 90 m² footprint stays at one or two storeys whether it is in
+Muldraugh or Chengdu, and a 2,500 m² one does not come out a bungalow. The
+Chinese tables override them where the housing genuinely differs - the
+self-built house runs 2-4 storeys (37 of 62 untagged houses on the renamed
+selftest town came out at three or more), and the walk-up blocks run 5-8.
+A mapper's own `building:levels` or `height` still beats every table, the
+neighbourhood median still beats it for the kinds that follow their
+neighbours, and `max_levels` still caps the lot.
+
 ## Footprint fitting
 
 A plain bounding box is wrong for anything not aligned to north: a 10x20

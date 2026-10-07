@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased (regional architecture)
+
+- **Chinese maps are built the Chinese way** (`knoxbuild/regional.py`, new;
+  `knoxbuild/build.py`, `knoxbuild/settings.py`, `app.py`, `static/js/app.js`).
+  A map whose own building names are written in Han script - mainland China,
+  Hong Kong, Taiwan, Singapore, any Chinatown's home town - is now detected
+  and built with its own architecture instead of Kentucky's: houses come from
+  a flat-roofed masonry pool (render, painted, stucco, panel, brick; never
+  clapboard, logs, trailer or the vinyl sidings), untagged self-built houses
+  run 2-4 storeys instead of 1-2, and walk-up flats and schools run taller.
+  Every tile is the catalog's own - a regional style is the shipped entry
+  with its pitched roof laid flat and its shutters left off, so nothing can
+  reference a tile the game has not got. Detection is by script, not by
+  borders: names with kana read as Japanese and hangul as Korean (built the
+  default way until those packs exist), and an English town keeps a handful
+  of Chinese restaurants without changing. A map that names nothing at all
+  falls back to its bounding box, which in practice means rural China. The
+  **Architecture** setting (`arch_style`: Auto / Chinese / Default) forces
+  the question either way, and Auto is the default. Dated prewar buildings -
+  `start_date`, `historic`, `heritage`, era tags - keep their pitched roofs
+  and era materials whatever the region: the temple and the 1920s shophouse
+  are the last things a regional pool should flatten. On the selftest town
+  with its names rewritten in Chinese: 62 of 75 houses from the `cn_` pool,
+  all 62 flat-roofed, 37 of 62 untagged houses at three storeys or more, and
+  the churches still peaked.
+
+- **Untagged storey counts come from the kind and the footprint together**
+  (`knoxbuild/regional.py`, `knoxbuild/build.py`). The old guess was a flat
+  range per kind - every shop 1-2 storeys whether it was a kiosk or a
+  department store. The new tables are the approach Arnis
+  (github.com/louis-e/arnis) uses for Minecraft: the kind and the real floor
+  area in square metres pick a weighted pool of storeys, so a 90 m2 footprint
+  stays low wherever it is and a 2,500 m2 one does not come out a bungalow.
+  Bands are in metres, not tiles, so the answer is the same at any map scale,
+  and a mapper's own `building:levels` or `height` still beats every table.
+  Any kind the tables do not list keeps the old range.
+
+- **Heritage-listed buildings are landmarks** (`knoxbuild/build.py`). The
+  `heritage=*` tag now counts with `historic=*` and `wikidata` when deciding
+  what is never thinned and always labelled on the paper map - a listed
+  building is on the map because somebody protected it, not because somebody
+  lives in it.
+
 ## 1.5.2
 
 - **Big maps no longer fail Generate buildings with "exceeds limit of 178956970

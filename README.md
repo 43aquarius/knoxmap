@@ -302,10 +302,17 @@ Everything the app does also works from the command line inside `.venv`:
 
 ```bat
 .venv\Scripts\python -m knoxbuild output\mytown --preset city --set max_levels=12
+.venv\Scripts\python -m knoxbuild output\mytown --set arch_style=cn
 .venv\Scripts\python tools\compile_map.py output\mytown
 .venv\Scripts\python tools\render_ground.py output\mytown street.png 300 300 40 40
 .venv\Scripts\python tools\audit_layouts.py 400
 ```
+
+Maps whose buildings are named in Chinese are detected and built the Chinese
+way automatically — flat-roofed masonry houses, taller self-built homes and
+walk-up flats. `--set arch_style=off` builds every town the default way, and
+`--set arch_style=cn` forces the Chinese look on any map. See
+[KNOXBUILD.md](KNOXBUILD.md) for how the regional styles are composed.
 
 - [KNOXBUILD.md](KNOXBUILD.md): how buildings, rooms, lifts, fences, streets and
   the population model work, and the measurements behind them.
