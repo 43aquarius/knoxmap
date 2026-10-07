@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A hung WorldEd batch no longer sinks the compile** (`tools/compile_map.py`).
+  A batch that never ended was waited on for two hours and then raised, which
+  ended the whole run ("Compile timed out"). A batch is now stopped after 30
+  minutes and counted as a failed attempt: retried, then recorded in
+  `compile_failures.json` and stepped over like any other failed batch.
+
 - **Building again is repeatable, and only lays out what changed**
   (`knoxbuild/tbx.py`, `knoxbuild/build.py`). Two builds of one map used to
   differ in every building's floors and trim: the seeds were `hash()` of a

@@ -36,7 +36,11 @@ import knoxpaths  # noqa: E402
 import knoxstop  # noqa: E402
 
 
-BATCH_TIMEOUT = 2 * 3600
+# A batch is a minute or two of work, three at the very most for the one that
+# converts the bitmap. One that has run for half an hour is hung (WorldEd
+# waiting on something that will not come), not slow; waiting two hours for it
+# held the whole compile up and then threw away the run.
+BATCH_TIMEOUT = 30 * 60
 # How often a running batch is asked whether the window wants it stopped.
 STOP_POLL_SECONDS = 1.0
 
@@ -806,7 +810,19 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                 throttle.acquire(should_stop)
                 try:
                     attempt_started = time.time()
-                    proc = _run_batch(cmd, should_stop, attempt_started)
+                    try:
+                        proc = _run_batch(cmd, should_stop, attempt_started)
+                    except subprocess.TimeoutExpired as hung:
+                        # A hung batch is a failed attempt like any other:
+                        # tried again, then written down and stepped over.
+                        knoxlog.log.warning(
+                            "compile %s [%s]: batch %d/%d cells %d,%d..%d,%d hung - no end "
+                            "after %d minutes, stopped", project.name, run, i, total,
+                            bx, by, x1, y1, BATCH_TIMEOUT // 60)
+                        proc = subprocess.CompletedProcess(
+                            cmd, 124, hung.output or "",
+                            (hung.stderr or "") + "\nWorldEd did not finish in "
+                            f"{BATCH_TIMEOUT // 60} minutes and was stopped.")
                 finally:
                     throttle.release()
                 # WorldEd's own account of the batch, kept whatever happened: when it
