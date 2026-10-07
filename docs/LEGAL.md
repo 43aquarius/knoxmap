@@ -53,7 +53,8 @@ Public instances expect roughly **under 10,000 requests and 1 GB per day** per
 user. KnoxMap identifies itself, splits large areas into a modest number of
 queries, backs off when refused, and caches every download next to the map so
 regenerating an area does not download it again. Very large or repeated use
-should run its own Overpass instance.
+should run its own Overpass instance: [SELF_HOSTING_OVERPASS.md](SELF_HOSTING_OVERPASS.md)
+says how, and the window's **Map data server** field points KnoxMap at it.
 
 ### Satellite imagery
 KnoxMap used to offer Esri World Imagery as a background. Esri's

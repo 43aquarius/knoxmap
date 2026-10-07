@@ -2968,6 +2968,84 @@ def check_health(check) -> None:
           "the health check lists the setup and the PC's room, and leaves the network alone by default")
 
 
+def check_overpass_setting(check, work: str) -> None:
+    """The map data servers can be named in the window and are used at once."""
+    from pathlib import Path
+
+    import app as knoxapp
+    import knoxpaths
+    from generator import osm
+
+    was_path, was_urls = knoxpaths.CONFIG_PATH, list(osm.OVERPASS_ENDPOINTS)
+    knoxpaths.CONFIG_PATH = Path(work) / "config_overpass.json"
+    try:
+        client = knoxapp.app.test_client()
+        mine = "http://localhost:12345/api/interpreter"
+        r = client.post("/api/overpass", json={"endpoints": f"  {mine}\n{mine} "})
+        d = r.get_json()
+        check(r.status_code == 200 and d["endpoints"] == [mine] and d["using"] == [mine]
+              and osm.OVERPASS_ENDPOINTS == [mine],
+              "a server of your own is saved and used at once (duplicates and spaces dropped)")
+        check(client.get("/api/overpass").get_json()["endpoints"] == [mine],
+              "and read back from the config")
+        for bad in ("ftp://x/y", "not a url", {"a": 1}, ["javascript:alert(1)"]):
+            check(client.post("/api/overpass", json={"endpoints": bad}).status_code == 400,
+                  f"{str(bad)[:24]!r} is refused")
+        check(client.post("/api/overpass", json=[1]).get_json()["using"] == osm.OVERPASS_ENDPOINTS
+              and osm.OVERPASS_ENDPOINTS == list(osm._DEFAULT_ENDPOINTS),
+              "an empty answer goes back to the public servers")
+    finally:
+        knoxpaths.CONFIG_PATH = was_path
+        osm.set_endpoints(was_urls if was_urls != list(osm._DEFAULT_ENDPOINTS) else None)
+
+
+def check_workshop(check, work: str) -> None:
+    """The pre-upload check finds a missing credit, a bad id and a missing picture."""
+    import shutil
+
+    from tools import workshop_check as wc
+
+    root = os.path.join(work, "wmod", "My_Map")
+    shutil.rmtree(os.path.dirname(root), ignore_errors=True)
+    for where in ("", "common", "42"):
+        os.makedirs(os.path.join(root, where), exist_ok=True)
+        with open(os.path.join(root, where, "mod.info"), "w", encoding="utf-8") as f:
+            f.write("name=My Map\nid=My_Map\ndescription=A map. Map data (c) OpenStreetMap contributors (ODbL).\n")
+    maps = os.path.join(root, "common", "media", "maps", "My_Map")
+    os.makedirs(maps)
+    open(os.path.join(maps, "0_0.lotheader"), "wb").close()
+    open(os.path.join(maps, "map.info"), "w").close()
+    with open(os.path.join(root, "ATTRIBUTION.txt"), "w", encoding="utf-8") as f:
+        f.write("Map data (c) OpenStreetMap contributors, available under the Open Database License (ODbL)")
+
+    def levels():
+        res = wc.check(root)
+        return {r["level"] for r in res}, wc.summary(res)
+
+    lv, s = levels()
+    check("bad" not in lv and s["ready"] and s["warn"] == 1,
+          "a complete mod is ready, with only the missing preview picture to warn about")
+    Image.new("RGB", (300, 300)).save(os.path.join(root, "preview.png"))
+    lv, s = levels()
+    check(lv == {"ok"} and s["warn"] == 0, "and with a square preview it has nothing to say")
+    Image.new("RGB", (300, 200)).save(os.path.join(root, "preview.png"))
+    check(levels()[1]["warn"] == 1, "a preview that is not square is warned about")
+    with open(os.path.join(root, "preview.png"), "wb") as f:
+        f.write(b"not a png")
+    check(not levels()[1]["ready"], "a preview that is not a PNG stops it")
+    os.remove(os.path.join(root, "preview.png"))
+    with open(os.path.join(root, "ATTRIBUTION.txt"), "w", encoding="utf-8") as f:
+        f.write("made with KnoxMap")
+    check(not levels()[1]["ready"], "an attribution without the OpenStreetMap credit stops it")
+    os.remove(os.path.join(root, "ATTRIBUTION.txt"))
+    check(not levels()[1]["ready"], "no attribution file stops it")
+    with open(os.path.join(root, "mod.info"), "w", encoding="utf-8") as f:
+        f.write("name=x\nid=bad id!\ndescription=nothing\n")
+    check(not levels()[1]["ready"], "a mod id with odd characters and a copy that differs stop it")
+    check(not wc.summary(wc.check(os.path.join(work, "nowhere")))["ready"],
+          "a mod that is not installed is not ready")
+
+
 def check_compile_state(check, work: str) -> None:
     """Working out which cells of a compiled map are out of date."""
     import numpy as np
@@ -3818,6 +3896,8 @@ def main(argv: list[str]) -> int:
         check_odd_requests(check, work)
         check_saved_areas(check, work)
         check_health(check)
+        check_overpass_setting(check, work)
+        check_workshop(check, work)
         check_compile_state(check, work)
         check_compile_records(check, work)
 

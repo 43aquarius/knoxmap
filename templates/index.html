@@ -92,6 +92,19 @@
       </details>
     </section>
 
+    <section class="panel" id="overpassCard">
+      <details id="overpassPanel">
+        <summary>Map data server</summary>
+        <p class="hint">Map data is downloaded from public OpenStreetMap servers. Large or
+          repeated downloads should use your own: list its address below, one per line
+          (see docs/SELF_HOSTING_OVERPASS.md). Leave it empty for the public ones.</p>
+        <textarea id="overpassList" rows="3" spellcheck="false"
+          placeholder="http://localhost:12345/api/interpreter"></textarea>
+        <button id="overpassSave" class="btn btn-small" type="button">Save</button>
+        <span id="overpassNote" class="step-note"></span>
+      </details>
+    </section>
+
     <section class="panel" id="mapsCard" hidden>
       <details id="mapsPanel">
         <summary>Your maps <span class="count" id="mapsCount"></span></summary>
@@ -282,6 +295,15 @@
         <span id="installNote" class="step-note">Copies the map into your Zomboid mods folder.</span>
       </div>
       <button id="installBtn" class="btn" disabled>Install</button>
+    </li>
+    <li class="pipe-card" data-step="publish" id="publishCard" hidden>
+      <div class="pipe-body">
+        <div class="pipe-title">Before you publish</div>
+        <span class="step-note">Checks the installed mod for the credit OpenStreetMap asks for,
+          a usable mod id and a preview picture. It uploads nothing.</span>
+        <div id="publishOut"></div>
+      </div>
+      <button id="publishCheckBtn" class="btn" type="button">Check</button>
     </li>
   </ol>
 </section>

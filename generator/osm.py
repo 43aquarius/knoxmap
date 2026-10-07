@@ -63,6 +63,24 @@ BLANK_ONLY_HOSTS = tuple(_config_list("overpass_blank_only")
 ANSWERING_ENDPOINTS = [e for e in OVERPASS_ENDPOINTS
                        if not any(h in e for h in BLANK_ONLY_HOSTS)]
 
+
+def set_endpoints(urls: Sequence[str] | None) -> list:
+    """Use these Overpass servers from now on, without a restart; none (or an
+    empty list) goes back to the public ones. Returns the list in use.
+
+    The settings window saves the same list to knoxmap_config.json, which is
+    what the next start reads."""
+    global OVERPASS_ENDPOINTS, ANSWERING_ENDPOINTS
+    OVERPASS_ENDPOINTS = [u for u in (urls or []) if u] or list(_DEFAULT_ENDPOINTS)
+    ANSWERING_ENDPOINTS = [e for e in OVERPASS_ENDPOINTS
+                           if not any(h in e for h in BLANK_ONLY_HOSTS)]
+    try:
+        from generator import places
+        places.OVERPASS_ENDPOINTS = list(ANSWERING_ENDPOINTS)
+    except Exception:  # noqa: BLE001 - the place search is optional here
+        pass
+    return list(OVERPASS_ENDPOINTS)
+
 # How long an instance that turned us away or stopped answering is left out of
 # the rotation. Without this every tile found out the same thing for itself:
 # nine tiles against a busy server each waited the full timeout to learn what

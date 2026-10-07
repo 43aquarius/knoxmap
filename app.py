@@ -1791,6 +1791,64 @@ def api_install():
                     "extras": extras, "modId": mod_id, "title": title})
 
 
+@app.route("/api/overpass", methods=["GET", "POST"])
+def api_overpass():
+    """Which Overpass servers map data is downloaded from.
+
+    The public ones by default; your own (docs/SELF_HOSTING_OVERPASS.md) when
+    named here. Saved as "overpass_endpoints" in knoxmap_config.json and used
+    at once, so a download started after saving already goes there."""
+    import urllib.parse
+
+    import knoxpaths
+
+    if request.method == "POST":
+        raw = _json_body().get("endpoints")
+        if raw is None or raw == "":
+            raw = []
+        if isinstance(raw, str):
+            raw = re.split(r"[\s,;]+", raw)
+        if not isinstance(raw, list):
+            return jsonify({"error": "Give the servers as a list of addresses."}), 400
+        urls = []
+        for item in raw:
+            url = str(item).strip()
+            if not url:
+                continue
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                return jsonify({"error": f"\"{url}\" is not an http(s) address."}), 400
+            if url not in urls:
+                urls.append(url)
+        if len(urls) > 8:
+            return jsonify({"error": "At most 8 servers."}), 400
+        knoxpaths.update_config({"overpass_endpoints": urls})
+        osm.set_endpoints(urls)
+        log.info("overpass servers: %s", urls or "the public ones")
+    try:
+        configured = knoxpaths.load_config().get("overpass_endpoints")
+    except Exception:  # noqa: BLE001
+        configured = None
+    return jsonify({"endpoints": [str(u) for u in configured] if isinstance(configured, list) else [],
+                    "using": list(osm.OVERPASS_ENDPOINTS),
+                    "public": list(osm._DEFAULT_ENDPOINTS)})
+
+
+@app.route("/api/workshop-check")
+def api_workshop_check():
+    """Is the installed map fit to publish? Reads the mod folder and uploads
+    nothing; see tools/workshop_check.py."""
+    from tools import make_map_mod, workshop_check
+
+    mod_id = SAFE_NAME.sub("_", request.args.get("modId", "")).strip("_")[:60]
+    if not mod_id:
+        return jsonify({"error": "Give the mod id."}), 400
+    map_dir = _map_dir(request.args.get("map", ""))
+    results = workshop_check.check(os.path.join(make_map_mod.default_mods_dir(), mod_id),
+                                   str(map_dir) if map_dir else None)
+    return jsonify({"results": results, **workshop_check.summary(results)})
+
+
 def _bbox_area_km2(south: float, west: float, north: float, east: float) -> float:
     lat_mid = (south + north) / 2
     h_km = (north - south) * 111.32

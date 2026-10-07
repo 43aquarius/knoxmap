@@ -622,6 +622,63 @@ document.getElementById('healthBtn').addEventListener('click', async () => {
   }
 });
 
+// ---- map data server -----------------------------------------------------------
+
+(async function loadOverpass() {
+  try {
+    const d = await (await fetch('/api/overpass')).json();
+    document.getElementById('overpassList').value = (d.endpoints || []).join('\n');
+  } catch (_) { /* the public servers are used either way */ }
+})();
+
+document.getElementById('overpassSave').addEventListener('click', async () => {
+  const btn = document.getElementById('overpassSave');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/overpass', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoints: document.getElementById('overpassList').value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw apiError(data, res);
+    note('overpassNote', data.endpoints.length
+         ? `Downloads now use ${data.endpoints.length} server${data.endpoints.length === 1 ? '' : 's'} of yours.`
+         : 'Downloads use the public servers.', 'ok');
+  } catch (err) {
+    note('overpassNote', err.message, 'bad');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---- before publishing -----------------------------------------------------------
+
+document.getElementById('publishCheckBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('publishCheckBtn');
+  const out = document.getElementById('publishOut');
+  btn.disabled = true;
+  out.innerHTML = '<p class="hint">Checking…</p>';
+  try {
+    const q = new URLSearchParams({
+      modId: document.getElementById('modId').value.trim(), map: currentMap || '' });
+    const res = await fetch('/api/workshop-check?' + q);
+    const d = await res.json();
+    if (!res.ok) throw apiError(d, res);
+    const mark = { ok: '✓', warn: '!', bad: '✗' };
+    out.innerHTML = '<ul class="setup-list">' + d.results.map(r =>
+      `<li class="${r.level === 'ok' ? 'ok' : 'missing'}"><span>${mark[r.level]}</span>
+        <b>${escapeHtml(r.what)}</b>${r.fix ? ` — ${escapeHtml(r.fix)}` : ''}</li>`).join('')
+      + '</ul>' + `<p class="hint">${d.ready
+        ? (d.warn ? 'Nothing stops you publishing; the warnings above are worth a look.'
+                  : 'Ready to publish.')
+        : `${d.bad} thing${d.bad === 1 ? '' : 's'} to fix before publishing.`}</p>`;
+  } catch (err) {
+    out.innerHTML = `<p class="hint">Could not check: ${escapeHtml(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // ---- Steam libraries -------------------------------------------------------------
 //
 // Found on their own; a drive that was missed (or that Steam still lists after
@@ -1502,6 +1559,7 @@ document.getElementById('installBtn').addEventListener('click', async () => {
          + 'in the game\'s Mods menu, then start a NEW save. In a save you are '
          + 'already playing, right-click the ground and pick "Reset loot" for '
          + 'fresh loot in a building.' + lifts, 'ok');
+    document.getElementById('publishCard').hidden = false;
   } catch (err) {
     note('installNote', err.message, 'bad');
     btn.disabled = false;

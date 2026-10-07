@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Your own map data server, set in the window** (`app.py`, `generator/osm.py`,
+  `docs/SELF_HOSTING_OVERPASS.md`). A "Map data server" field takes the address of an
+  Overpass server of your own, saves it as `overpass_endpoints` and uses it at
+  once; empty goes back to the public ones. The new doc says how to run one for
+  a region. Reading a `.pbf` directly is still not supported.
+- **A check before publishing to the Workshop** (`tools/workshop_check.py`).
+  After Install, "Before you publish" reads the mod folder and reports a missing
+  or incomplete OpenStreetMap credit (and Overture, when used), a mod id the game
+  cannot use, mod.info copies that differ, no compiled cells, and a missing or
+  unsuitable `preview.png`. It uploads nothing.
+
 - **A hung WorldEd batch no longer sinks the compile** (`tools/compile_map.py`).
   A batch that never ended was waited on for two hours and then raised, which
   ended the whole run ("Compile timed out"). A batch is now stopped after 30
