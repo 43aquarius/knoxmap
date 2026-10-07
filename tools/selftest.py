@@ -2968,6 +2968,27 @@ def check_health(check) -> None:
           "the health check lists the setup and the PC's room, and leaves the network alone by default")
 
 
+def check_other_websites(check) -> None:
+    """A page on another website cannot make KnoxMap do things by posting to it."""
+    import app as knoxapp
+
+    client = knoxapp.app.test_client()
+
+    def post(**headers):
+        # /api/stop with no map name answers 400 and does nothing: a refusal is 403.
+        return client.post("/api/stop", json={}, headers=headers).status_code
+
+    check(post() == 400 and post(Origin="http://127.0.0.1:5000") == 400
+          and post(Origin="http://localhost:5000") == 400 and post(Origin="http://[::1]:5000") == 400,
+          "posts from KnoxMap's own page, and from tools with no Origin, are answered")
+    check(post(Origin="http://evil.example") == 403 and post(Origin="null") == 403
+          and post(Origin="http://127.0.0.1.evil.example") == 403,
+          "posts from other websites are refused")
+    check(post(**{"Sec-Fetch-Site": "cross-site"}) == 403
+          and client.get("/api/health", headers={"Origin": "http://evil.example"}).status_code == 200,
+          "and so is a cross-site post that sends no Origin, while reading stays open")
+
+
 def check_overpass_setting(check, work: str) -> None:
     """The map data servers can be named in the window and are used at once."""
     from pathlib import Path
@@ -3896,6 +3917,7 @@ def main(argv: list[str]) -> int:
         check_odd_requests(check, work)
         check_saved_areas(check, work)
         check_health(check)
+        check_other_websites(check)
         check_overpass_setting(check, work)
         check_workshop(check, work)
         check_compile_state(check, work)

@@ -18,6 +18,7 @@ import shutil
 import sys
 import threading
 import time
+import urllib.parse
 import zipfile
 from pathlib import Path
 
@@ -262,6 +263,22 @@ def _only_local():
     host = (request.host or "").rsplit(":", 1)[0] if not (request.host or "").startswith("[")         else (request.host or "").split("]")[0] + "]"
     if host not in LOCAL_HOSTS:
         return ("KnoxMap only answers requests from this computer.", 403)
+    # A page open in the browser can send this server a plain POST with no body
+    # (open the logs, restart for an update, change the language): the browser
+    # allows it and the Host above is ours. Browsers say where such a request
+    # came from, so one that came from somewhere else is refused. A request with
+    # no Origin (the test client, curl) is not a browser's and passes.
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin")
+        if origin is not None:
+            try:
+                origin_host = urllib.parse.urlparse(origin).hostname
+            except ValueError:
+                origin_host = None
+            if origin_host not in LOCAL_HOSTS:
+                return ("KnoxMap does not take requests from other websites.", 403)
+        elif request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return ("KnoxMap does not take requests from other websites.", 403)
 
 
 # Where a map stops being an easy one. None of these refuses anything: they
@@ -1798,8 +1815,6 @@ def api_overpass():
     The public ones by default; your own (docs/SELF_HOSTING_OVERPASS.md) when
     named here. Saved as "overpass_endpoints" in knoxmap_config.json and used
     at once, so a download started after saving already goes there."""
-    import urllib.parse
-
     import knoxpaths
 
     if request.method == "POST":

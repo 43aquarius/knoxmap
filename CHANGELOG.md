@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Other websites can no longer post to KnoxMap** (`app.py`). A page open in the
+  browser could send the server a plain POST with no body (open the logs,
+  restart for an update, change the language) and it was run: the Host was
+  checked, where the request came from was not. A POST or DELETE whose `Origin`
+  is not this computer, or that the browser marks `cross-site`, is now refused.
+  Requests with no `Origin` (curl, the tests) are unchanged.
 - **Your own map data server, set in the window** (`app.py`, `generator/osm.py`,
   `docs/SELF_HOSTING_OVERPASS.md`). A "Map data server" field takes the address of an
   Overpass server of your own, saves it as `overpass_endpoints` and uses it at
