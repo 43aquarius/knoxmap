@@ -220,8 +220,9 @@ def _clip_to_shape(landscape: Image.Image, shape, buckets: dict[str, list[OSMFea
         for feat in buckets.get(cat, []):
             if _is_polygon(feat):
                 continue
-            width = (_way_width_m(feat, cat) + 2 * _sidewalk_width_m(feat, cat)) / mpt
-            _draw_line(kd, _feature_coords_px(feat, proj), 255, int(width))
+            width = _pixel_width(_way_width_m(feat, cat)
+                                 + 2 * _sidewalk_width_m(feat, cat), mpt)
+            _draw_line(kd, _feature_coords_px(feat, proj), 255, width)
     for cat in ("water", "pool", "coastline"):
         for feat in buckets.get(cat, []):
             if _is_polygon(feat):
@@ -462,7 +463,7 @@ LANDSCAPE_FILL = {
 # not a house.
 AREA_CATEGORIES = {"residential", "commercial", "industrial", "military",
                    "schoolyard", "hospital_grounds", "worship_grounds",
-                   "cemetery", "parking", "sports"}
+                   "cemetery", "parking", "sports", "park", "playground"}
 # Drawn onto the vegetation bitmap rather than the ground.
 VEG_CATEGORIES = {"forest", "scrub", "tree_single", "hedge", "orchard",
                   "cemetery", "wetland"}
@@ -492,6 +493,42 @@ def _way_width_m(feat: OSMFeature, cat: str) -> float:
                 width = max(width, 3.5)
             return width
     return base
+
+
+def _pixel_width(metres: float, metres_per_tile: float) -> int:
+    """Convert a real width to the nearest whole bitmap tile, never zero."""
+    return max(1, int(math.floor(metres / max(0.05, metres_per_tile) + 0.5)))
+
+
+def _road_markings(feat: OSMFeature, cat: str) -> list[tuple[str, float]]:
+    """(color, offset in metres) for lane markings across a road centerline."""
+    width = _way_width_m(feat, cat)
+    if any(str(feat.tags.get(key, "")).lower() == "no"
+           for key in ("centreline", "centerline", "road_marking")):
+        return []
+    raw_lanes = str(feat.tags.get("lanes") or "").split(";")[0].strip()
+    try:
+        lanes = max(1, min(8, int(float(raw_lanes)))) if raw_lanes else max(
+            1, min(8, int(round(width / 3.2))))
+    except ValueError:
+        lanes = max(1, min(8, int(round(width / 3.2))))
+    if lanes < 2:
+        return []
+
+    oneway = (str(feat.tags.get("oneway") or "").lower() in ("yes", "1", "-1")
+              or feat.tags.get("junction") == "roundabout")
+    lane_width = width / lanes
+    if oneway:
+        return [("white", -width / 2 + lane_width * lane)
+                for lane in range(1, lanes)]
+
+    markings = [("yellow", 0.0)]
+    lanes_per_direction = lanes // 2
+    if lanes >= 4:
+        for lane in range(1, lanes_per_direction):
+            offset = lane_width * lane
+            markings.extend((("white", -offset), ("white", offset)))
+    return markings
 
 
 def _feature_coords_px(feat: OSMFeature, proj: Projector) -> list[list[tuple[float, float]]]:
@@ -533,7 +570,7 @@ def _road_hierarchy_image(buckets: dict[str, list[OSMFeature]], proj: Projector)
                 if cat in ROAD_WIDTHS_M:
                     width += 2 * _sidewalk_width_m(feat, cat)
                 _draw_line(draw, _feature_coords_px(feat, proj), code,
-                           max(1, int(width / proj.meters_per_tile)))
+                           _pixel_width(width, proj.meters_per_tile))
     return image
 
 
@@ -608,7 +645,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
            osm_cache: str | None = None,
            osm_bbox: tuple[float, float, float, float] | None = None,
            shape: dict | None = None,
-           straight_roads: bool = False,
+           straight_roads: bool = True,
            should_stop=None) -> RenderResult:
     proj = Projector.build(south, west, north, east, meters_per_tile, rotation)
     # Read more than once below - the buildings pass goes back over the
@@ -711,25 +748,27 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
                     if _is_polygon(feat):
                         continue
                     margin = _sidewalk_width_m(feat, road)
-                    width_px = (_way_width_m(feat, road) + 2 * margin) / meters_per_tile
+                    width_px = _pixel_width(_way_width_m(feat, road) + 2 * margin,
+                                            meters_per_tile)
                     _draw_line(l_draw, ground_rings(feat),
-                               C.PALE_CONCRETE, int(width_px))
+                               C.PALE_CONCRETE, width_px)
             for road in ("road_service", "road_minor", "road_medium", "road_major"):
                 for feat in buckets.get(road, []):
                     if _is_polygon(feat):
                         continue
                     verge = _verge_width_m(feat, road)
-                    width_px = (_way_width_m(feat, road) + 2 * verge) / meters_per_tile
+                    width_px = _pixel_width(_way_width_m(feat, road) + 2 * verge,
+                                            meters_per_tile)
                     _draw_line(l_draw, ground_rings(feat),
-                               C.DARK_GRASS, int(width_px))
+                               C.DARK_GRASS, width_px)
         fill = LANDSCAPE_FILL.get(cat)
         if fill is None:
             continue
         for feat in buckets.get(cat, []):
             rings = _feature_coords_px(feat, proj)
             if cat in ROAD_WIDTHS_M and not _is_polygon(feat):
-                width_px = _way_width_m(feat, cat) / meters_per_tile
-                _draw_line(l_draw, ground_rings(feat), fill, int(width_px))
+                width_px = _pixel_width(_way_width_m(feat, cat), meters_per_tile)
+                _draw_line(l_draw, ground_rings(feat), fill, width_px)
             elif feat.kind == "relation":
                 _paint_multipolygon(landscape, feat, proj, fill)
             elif _is_polygon(feat):
@@ -737,7 +776,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
             else:
                 # A river or canal mapped only as its centre line.
                 metres = WATERWAY_WIDTH_M.get(feat.tags.get("waterway"), 3.0)
-                _draw_line(l_draw, rings, fill, max(1, int(metres / meters_per_tile)))
+                _draw_line(l_draw, rings, fill, _pixel_width(metres, meters_per_tile))
 
     # Bridges over water squared to the tiles (generator/structures.py).
     for deck, cat in lifted.straight:
@@ -755,6 +794,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     _paint_gardens(vegetation, landscape, building_feats, proj, density=tree_density)
     _paint_wild_growth(vegetation, landscape, proj, density=tree_density)
     _clear_building_vegetation(vegetation, building_feats, proj)
+    _clear_road_vegetation(vegetation, landscape)
     _paint_road_details(vegetation, landscape, buckets, proj)
     road_hierarchy = _road_hierarchy_image(buckets, proj)
     _paint_street_furniture(vegetation, landscape, road_hierarchy)
@@ -1084,25 +1124,37 @@ def _paint_road_details(veg: Image.Image, landscape: Image.Image,
             out[(sides == bits) & free] = colour
         veg.paste(Image.fromarray(out), (0, y0))
 
-    # Centre lines, on roads wide enough for two lanes and straight enough to
-    # run along one axis of the tile grid; a line stepping round a diagonal
-    # reads as a zigzag, so those are left plain.
+    # Lane markings follow direction and lane count. Two-way traffic gets a
+    # yellow separator; one-way and same-direction lanes use white dividers.
+    # Diagonal segments are left plain because rasterizing their stripes would
+    # make a tile-grid zigzag.
     mpt = proj.meters_per_tile
     marks = []
-    for cat, style in (("road_major", "yellow"), ("road_medium", "white")):
+    for cat in ("road_major", "road_medium", "road_minor"):
         for feat in buckets.get(cat, []):
             if _is_polygon(feat):
                 continue
             width = _way_width_m(feat, cat) / mpt
-            if width < 6 or feat.tags.get("oneway") in ("yes", "1", "-1"):
+            markings = _road_markings(feat, cat)
+            if not markings:
                 continue
             for ring in _feature_coords_px(feat, proj):
                 for (ax, ay), (bx, by) in zip(ring, ring[1:]):
                     dx, dy = bx - ax, by - ay
+                    length = math.hypot(dx, dy)
+                    if not length:
+                        continue
+                    nx, ny = -dy / length, dx / length
                     if abs(dy) <= 0.2 * abs(dx):
-                        marks.append((style, "N", ax, ay, bx, by, width))
+                        edge = "N"
                     elif abs(dx) <= 0.2 * abs(dy):
-                        marks.append((style, "W", ax, ay, bx, by, width))
+                        edge = "W"
+                    else:
+                        continue
+                    for style, offset_m in markings:
+                        ox, oy = nx * offset_m / mpt, ny * offset_m / mpt
+                        marks.append((style, edge, ax + ox, ay + oy,
+                                      bx + ox, by + oy, width))
     if not marks:
         return
     colour_for = {("yellow", "N"): C.LINE_YELLOW_N, ("yellow", "W"): C.LINE_YELLOW_W,
@@ -1838,6 +1890,27 @@ def _clear_building_vegetation(veg: Image.Image, feats: list[OSMFeature],
                 md.polygon(ring, fill=1)
     blank = Image.new("RGB", veg.size, C.VEG_NOTHING)
     veg.paste(blank, (0, 0), mask)
+
+
+def _clear_road_vegetation(veg: Image.Image, landscape: Image.Image) -> None:
+    """Keep mapped woodland and scrub off every rasterized road surface."""
+    import numpy as np
+
+    road_colours = np.array((C.DARK_ASPHALT, C.MEDIUM_ASPHALT, C.LIGHT_ASPHALT,
+                             C.DARKEST_ASPHALT, C.DARK_POTHOLE,
+                             C.LIGHT_POTHOLE), dtype=np.uint8)
+    width, height = landscape.size
+    for top in range(0, height, 256):
+        bottom = min(height, top + 256)
+        ground = np.asarray(landscape.crop((0, top, width, bottom)))
+        road = np.zeros(ground.shape[:2], dtype=bool)
+        for colour in road_colours:
+            road |= np.all(ground == colour, axis=2)
+        if not road.any():
+            continue
+        vegetation = np.array(veg.crop((0, top, width, bottom)))
+        vegetation[road] = C.VEG_NOTHING
+        veg.paste(Image.fromarray(vegetation), (0, top))
 
 
 def _places(feats: list[OSMFeature], proj: Projector) -> list[dict]:

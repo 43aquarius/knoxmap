@@ -44,7 +44,7 @@ class Settings:
     rotate_degrees: float = 0.0
     # Lay every road in straight runs along the tiles and on 45-degree
     # diagonals, like Knox County's (1), or draw them as mapped (0).
-    straight_roads: int = 0
+    straight_roads: int = 1
 
     # --- terrain ---------------------------------------------------------
     # Multiplies how much of a forest polygon actually becomes trees.

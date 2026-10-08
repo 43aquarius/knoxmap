@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 from PIL import Image
 
-from generator import osm, renderer
+from generator import osm, renderer, structures
 from knoxbuild import build as building
 from knoxbuild.context import Context
 
@@ -48,6 +48,52 @@ class RoadHierarchyTests(unittest.TestCase):
         feat = SimpleNamespace(tags={"highway": "residential", "width": "8 m"})
         self.assertEqual(renderer._way_width_m(feat, "road_minor"), 8.0)
 
+    def test_widths_round_to_the_nearest_bitmap_tile(self):
+        self.assertEqual(renderer._pixel_width(3.5, 1.0), 4)
+        self.assertEqual(renderer._pixel_width(4.0, 1.6), 3)
+
+    def test_lane_markings_follow_direction_and_lane_count(self):
+        two_way = SimpleNamespace(tags={"highway": "residential", "lanes": "2"})
+        one_way = SimpleNamespace(tags={"highway": "residential", "lanes": "2",
+                                        "oneway": "yes"})
+        divided = SimpleNamespace(tags={"highway": "primary", "lanes": "4"})
+
+        self.assertEqual(renderer._road_markings(two_way, "road_minor"),
+                         [("yellow", 0.0)])
+        self.assertEqual(renderer._road_markings(one_way, "road_minor"),
+                         [("white", 0.0)])
+        self.assertEqual(renderer._road_markings(divided, "road_major"),
+                         [("yellow", 0.0), ("white", -3.45), ("white", 3.45)])
+
+    def test_oneway_and_twoway_lane_colors_are_painted_on_the_road(self):
+        def markings(oneway):
+            ground = Image.new("RGB", (40, 30), renderer.C.DARK_GRASS)
+            for y in range(11, 19):
+                for x in range(40):
+                    ground.putpixel((x, y), renderer.C.MEDIUM_ASPHALT)
+            vegetation = Image.new("RGB", ground.size, renderer.C.VEG_NOTHING)
+            tags = {"highway": "residential", "lanes": "2"}
+            if oneway:
+                tags["oneway"] = "yes"
+            road = osm.OSMFeature(1, "way", tags, [(15, 2), (15, 38)])
+            projection = SimpleNamespace(meters_per_tile=1.0,
+                                         to_px=lambda lat, lon: (lon, lat))
+
+            renderer._paint_road_details(vegetation, ground,
+                                         {"road_minor": [road]}, projection)
+            return {vegetation.getpixel((x, 15)) for x in range(40)}
+
+        one_way_colors = markings(True)
+        two_way_colors = markings(False)
+        self.assertIn(renderer.C.LINE_WHITE_N, one_way_colors)
+        self.assertNotIn(renderer.C.LINE_YELLOW_N, one_way_colors)
+        self.assertIn(renderer.C.LINE_YELLOW_N, two_way_colors)
+
+    def test_tunnels_are_not_surface_roads_and_bridges_keep_their_height(self):
+        self.assertIsNone(osm.classify({"highway": "primary", "tunnel": "yes"}))
+        self.assertEqual(structures.level_of({"bridge": "yes"}), 1)
+        self.assertEqual(structures.level_of({"layer": "2"}), 2)
+
     def test_sidewalks_and_verges_follow_road_hierarchy(self):
         motorway = SimpleNamespace(tags={"highway": "motorway"})
         residential = SimpleNamespace(tags={"highway": "residential"})
@@ -79,6 +125,32 @@ class RoadHierarchyTests(unittest.TestCase):
                 directory, "map", SimpleNamespace(width=4, height=2), classes)
 
         self.assertGreater(weight[0, 1], weight[0, 0])
+
+    def test_building_avoidance_detects_road_surfaces_without_hierarchy(self):
+        colours = (renderer.C.DARK_ASPHALT, renderer.C.MEDIUM_ASPHALT,
+                   renderer.C.LIGHT_ASPHALT, renderer.C.DARKEST_ASPHALT)
+        with TemporaryDirectory() as directory:
+            ground = Image.new("RGB", (len(colours), 1), renderer.C.DARK_GRASS)
+            for x, colour in enumerate(colours):
+                ground.putpixel((x, 0), colour)
+            ground.save(f"{directory}/map.bmp")
+
+            weight = building._road_weight(
+                directory, "map", SimpleNamespace(width=len(colours), height=1))
+
+        self.assertTrue(np.all(weight[0] > 0))
+
+    def test_trees_are_cleared_from_road_surfaces(self):
+        ground = Image.new("RGB", (3, 1), renderer.C.DARK_GRASS)
+        ground.putpixel((0, 0), renderer.C.DARK_ASPHALT)
+        ground.putpixel((1, 0), renderer.C.MEDIUM_ASPHALT)
+        vegetation = Image.new("RGB", ground.size, renderer.C.TREES)
+
+        renderer._clear_road_vegetation(vegetation, ground)
+
+        self.assertEqual(vegetation.getpixel((0, 0)), renderer.C.VEG_NOTHING)
+        self.assertEqual(vegetation.getpixel((1, 0)), renderer.C.VEG_NOTHING)
+        self.assertEqual(vegetation.getpixel((2, 0)), renderer.C.TREES)
 
     def test_higher_order_roads_raise_local_urban_density(self):
         classes = np.zeros((40, 40), dtype=np.uint8)

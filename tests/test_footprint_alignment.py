@@ -67,6 +67,26 @@ class BuildingAlignment(unittest.TestCase):
         self.assertLess(len(clean.exterior.coords), len(rough.exterior.coords))
         self.assertLessEqual(abs(clean.area - rough.area), 1.0)
 
+    def test_road_avoidance_moves_building_completely_clear(self):
+        polygon = [(12, 12), (20, 12), (20, 20), (12, 20)]
+        avoid = np.zeros((40, 40), dtype=bool)
+        avoid[12:14, :] = True
+
+        footprint, reason = place(polygon, np.zeros_like(avoid), avoid=avoid)
+
+        self.assertEqual(reason, "ok")
+        self.assertFalse(avoid[footprint.y0:footprint.y0 + footprint.height,
+                               footprint.x0:footprint.x0 + footprint.width].any())
+
+    def test_building_is_rejected_when_no_road_clearance_is_possible(self):
+        polygon = [(12, 12), (20, 12), (20, 20), (12, 20)]
+        avoid = np.ones((40, 40), dtype=bool)
+
+        footprint, reason = place(polygon, np.zeros_like(avoid), avoid=avoid)
+
+        self.assertIsNone(footprint)
+        self.assertEqual(reason, "taken")
+
     def test_legacy_angle_settings_migrate(self):
         self.assertEqual(Settings.from_dict({"square_buildings": 0}).building_alignment,
                          "real")

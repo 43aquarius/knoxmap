@@ -88,6 +88,16 @@ class FocalRooms(unittest.TestCase):
         self.assertEqual(set(plan.doors), {(6, 12, "N"), (7, 12, "N"),
                                            (0, 6, "W")})
 
+    def test_tagged_garage_gets_a_wide_door_on_its_street_wall(self):
+        storey = layout.build_building(12, 8, kind="shed", street="S",
+                                       garage_door=True, seed=31).storeys[0]
+        street_runs = [wall for room_id in range(1, len(storey.rooms) + 1)
+                       for side, wall in layout._outside_runs(storey, room_id)
+                       if side == "S"]
+
+        self.assertTrue(any(sum(edge in storey.doors for edge in wall) >= 3
+                            for wall in street_runs))
+
 
 if __name__ == "__main__":
     unittest.main()
