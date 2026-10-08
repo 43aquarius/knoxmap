@@ -813,6 +813,18 @@ def generate():
     if max(approx_w, approx_h) > BIG_TILES_PER_SIDE:
         heavy.append(f"{int(approx_w)}x{int(approx_h)} tiles, over the "
                      f"{BIG_TILES_PER_SIDE} a side that is comfortable")
+    # The one size that is refused: WorldEd cannot compile it, so a map this big
+    # would be made over most of an hour and then fail at the compile.
+    from tools.compile_map import WORLDED_MAX_PIXELS, bitmap_pixels, scale_that_fits
+    pixels = bitmap_pixels(int(approx_w), int(approx_h))
+    if pixels > WORLDED_MAX_PIXELS:
+        fits = scale_that_fits(int(approx_w), int(approx_h), meters_per_tile)
+        return jsonify({"error": (
+            f"That map would be about {int(approx_w)} x {int(approx_h)} tiles "
+            f"({pixels / 1e6:.0f} million), and WorldEd cannot compile a map past "
+            f"{WORLDED_MAX_PIXELS / 1e6:.0f} million. "
+            + (f"At {fits} m a tile it fits, or draw a smaller area."
+               if fits else "Draw a smaller area."))}), 400
     tight = _too_big_for_memory(approx_w, approx_h)
     if tight:
         heavy.append(tight)
