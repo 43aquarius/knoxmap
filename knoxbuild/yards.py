@@ -72,7 +72,8 @@ _SIDE = {(0, -1): "N", (0, 1): "S", (-1, 0): "W", (1, 0): "E"}
 
 def _outside_doors(tbx_path: str) -> list[tuple[int, int, int, int]]:
     """(outside x, y, inside x, y) of each ground-floor outside door, front first."""
-    text = open(tbx_path, encoding="utf-8").read()
+    with open(tbx_path, encoding="utf-8") as f:
+        text = f.read()
     first = text.split("<floor>", 2)
     if len(first) < 2:
         return []
@@ -97,10 +98,24 @@ def _outside_doors(tbx_path: str) -> list[tuple[int, int, int, int]]:
     return found
 
 
+def _pave_patio(ground, veg, crossable, claimed, cells):
+    """Pave only unclaimed lawn so one home's patio cannot overwrite a neighbor's path."""
+    h, w = crossable.shape
+    paved = []
+    for x, y in cells:
+        if not (0 <= x < w and 0 <= y < h) or not crossable[y, x] or claimed[y, x]:
+            continue
+        ground[y, x] = C.PAVING_STONE
+        if veg is not None:
+            veg[y, x] = C.VEG_NOTHING
+        paved.append((x, y))
+    return paved
+
+
 def paint_paths(out_dir: str, map_name: str, rows: list[dict], occupied,
                 drives: list | None = None,
                 lights: list | None = None) -> tuple[int, list]:
-    """Dress every house in `rows`. Returns (houses dressed, back-yard fence lines).
+    """Dress houses and connect mapped garages. Return houses dressed and fences.
 
     Each drive's parking space, (x, y, width, height) at its house end, is
     added to `drives` when it is given: the car belongs there. Porch lights
@@ -127,6 +142,8 @@ def paint_paths(out_dir: str, map_name: str, rows: list[dict], occupied,
         return mask
 
     paved = match(PAVED)
+    road = match((C.DARK_ASPHALT, C.MEDIUM_ASPHALT, C.LIGHT_ASPHALT,
+                  C.DARKEST_ASPHALT, C.DARK_POTHOLE, C.LIGHT_POTHOLE))
     crossable = match(CROSSABLE) & ~occupied
     claimed = np.zeros((h, w), dtype=bool)     # painted for some house already
 
@@ -340,16 +357,11 @@ def paint_paths(out_dir: str, map_name: str, rows: list[dict], occupied,
                 if v == 0 and 2 <= u < width - 3:
                     mid = u
                     break
+            patio_tiles = []
             for v in range(min(3, depth - 1)):
                 for u in range(mid - 2, mid + 3):
-                    x, y = at(u, v)
-                    if 0 <= x < w and 0 <= y < h and crossable[y, x]:
-                        # A shrub or tuft on the patio goes; so does anything
-                        # a neighbour's drive claimed only by overlap.
-                        ground[y, x] = C.PAVING_STONE
-                        if veg is not None:
-                            veg[y, x] = 0
-                        claimed[y, x] = False       # furniture may stand on it
+                    patio_tiles.extend(_pave_patio(
+                        ground, veg, crossable, claimed, (at(u, v),)))
             place(mid - 2, 1, C.GRILL)
             if dy:
                 place(mid, 1, C.TABLE_X0); place(mid + 1, 1, C.TABLE_X1)
@@ -357,6 +369,8 @@ def paint_paths(out_dir: str, map_name: str, rows: list[dict], occupied,
             else:
                 place(mid, 1, C.TABLE_Y0); place(mid, 2, C.TABLE_Y1)
                 place(mid - 1, 1, C.CHAIR_W); place(mid + 1, 2, C.CHAIR_E)
+            for x, y in patio_tiles:
+                claimed[y, x] = True
 
             # Washing line along the back fence, if the yard is wide enough.
             v_line = depth - 2
@@ -383,6 +397,67 @@ def paint_paths(out_dir: str, map_name: str, rows: list[dict], occupied,
                         paint(x, y, C.DIRT)
                         veg[y, x] = frame[(col, row)]
         dressed += 1
+
+    for row in rows:
+        if (row.get("building") not in ("garage", "garages")
+                and row.get("kind") != "garage"):
+            continue
+        doors = _outside_doors(os.path.join(out_dir, "buildings", row["file"]))
+        if not doors:
+            continue
+        ox, oy, _ix, _iy = doors[0]
+        start = (row["tile_x"] + ox, row["tile_y"] + oy)
+        sx, sy = start
+        if not (0 <= sx < w and 0 <= sy < h) or occupied[sy, sx]:
+            continue
+        if road[sy, sx]:
+            continue
+
+        traversable = (crossable | paved | road) & ~occupied & ~claimed
+        previous = {start: None}
+        queue = deque([(sx, sy, 0)])
+        end = None
+        while queue:
+            x, y, distance = queue.popleft()
+            if road[y, x]:
+                end = (x, y)
+                break
+            if distance >= PATH_MAX_TILES:
+                continue
+            for dx, dy in ((0, -1), (-1, 0), (1, 0), (0, 1)):
+                nx, ny = x + dx, y + dy
+                if (0 <= nx < w and 0 <= ny < h and (nx, ny) not in previous
+                        and traversable[ny, nx]):
+                    previous[(nx, ny)] = (x, y)
+                    queue.append((nx, ny, distance + 1))
+        if end is None:
+            continue
+
+        route = []
+        step = end
+        while step is not None:
+            route.append(step)
+            step = previous[step]
+        route.reverse()
+        painted = []
+        for index, (x, y) in enumerate(route):
+            before = route[max(0, index - 1)]
+            after = route[min(len(route) - 1, index + 1)]
+            if before[0] != after[0]:
+                across = ((x, y - 1), (x, y), (x, y + 1))
+            else:
+                across = ((x - 1, y), (x, y), (x + 1, y))
+            for px, py in across:
+                if (0 <= px < w and 0 <= py < h and not road[py, px]
+                        and not occupied[py, px] and not claimed[py, px]
+                        and (crossable[py, px] or paved[py, px])):
+                    paint(px, py, C.DARK_ASPHALT)
+                    painted.append((px, py))
+        if drives is not None and painted:
+            near_garage = painted[:min(len(painted), DRIVE_WIDTH * 5)]
+            xs, ys = [point[0] for point in near_garage], [point[1] for point in near_garage]
+            drives.append((min(xs), min(ys), max(xs) - min(xs) + 1,
+                           max(ys) - min(ys) + 1))
 
     Image.fromarray(ground).save(bmp, format="BMP")
     if veg is not None:

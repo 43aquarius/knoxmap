@@ -203,6 +203,48 @@ def _fits(plan, idx, role, x, y, orient, blocked) -> list[tuple[int, int]] | Non
     return cells
 
 
+def furnish_service_bay(plan, idx: int, room, rng: random.Random,
+                        door_tiles: set, keep_clear: set,
+                        mechanic: bool = False) -> bool:
+    """Furnish the perimeter of a garage while leaving vehicle bays open."""
+    L = _layout()
+    cells = _cells(plan, idx, room)
+    if len(cells) < MIN_SALES_FLOOR or min(room.w, room.h) < 6:
+        return False
+    front = _front_side(plan, idx, cells, None)
+    frame = Frame(cells, front)
+    blocked = set(keep_clear) | set(door_tiles)
+    for x, y in door_tiles:
+        if (x, y) in cells:
+            blocked.update((x + dx, y + dy)
+                           for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+    placed: set[tuple[int, int]] = set()
+
+    def put(role: str, along: int, depth: int, wall: str) -> bool:
+        x, y = frame.xy(along, depth)
+        orient = L._facing(role, wall)
+        got = _fits(plan, idx, role, x, y, orient, blocked | placed)
+        if got is None:
+            return False
+        plan.furniture.append((role, x, y, orient))
+        placed.update(got)
+        return True
+
+    left, right = (("W", "E") if frame.along_x else ("N", "S"))
+    for depth in range(4, frame.depth - 2, 4):
+        for along, side in ((0, left), (frame.length - 1, right)):
+            put(rng.choice(("metal_rack", "crate")), along, depth, side)
+
+    back = OPPOSITE[front]
+    rear_depth = frame.depth - 1
+    if mechanic:
+        put("counter_2", frame.length // 2, rear_depth, back)
+    for along, role in ((max(1, frame.length // 4), "metal_rack"),
+                        (min(frame.length - 2, 3 * frame.length // 4), "crate")):
+        put(role, along, rear_depth, back)
+    return True
+
+
 def furnish_store(plan, idx: int, room, rng: random.Random, door_tiles: set,
                   keep_clear: set, street: str | None) -> bool:
     """Fit out a shop's sales floor. False if the room is too small to."""

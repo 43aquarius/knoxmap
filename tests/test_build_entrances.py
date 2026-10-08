@@ -6,7 +6,8 @@ from unittest import mock
 import numpy as np
 
 from knoxbuild import build
-from knoxbuild.footprint import Footprint
+from knoxbuild import layout
+from knoxbuild.footprint import Footprint, place
 from knoxbuild.profile import BuildingProfile
 
 
@@ -36,7 +37,7 @@ class EntrancePointMapping(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = f"{directory}/building.tbx"
             job = (4, 4, 1, False, 1, "hospital", None, None, None, "hospital",
-                     path, None, False, [], False, entrances, profile, party)
+                     path, None, False, [], False, entrances, profile, False, party)
             with mock.patch.object(build, "build_building", return_value=plan) as make, \
                     mock.patch.object(build, "render_tbx", return_value="tbx"):
                 result = build._make_one(job)
@@ -45,6 +46,34 @@ class EntrancePointMapping(unittest.TestCase):
             self.assertEqual(make.call_args.kwargs["entrances"], entrances)
             self.assertIs(make.call_args.kwargs["profile"], profile)
             self.assertEqual(make.call_args.kwargs["party"], party)
+
+    def test_overlapping_footprints_become_adjoining_party_walls(self):
+        occupied = np.zeros((40, 40), dtype=bool)
+        lots = np.zeros_like(occupied)
+        first, reason = place([(10, 10), (20, 10), (20, 20), (10, 20)],
+                              occupied, lots=lots)
+        self.assertEqual(reason, "ok")
+        second, reason = place([(18, 10), (28, 10), (28, 20), (18, 20)],
+                               occupied, lots=lots)
+        self.assertEqual(reason, "ok")
+        self.assertTrue(first.x0 + first.width <= second.x0
+                        or second.x0 + second.width <= first.x0
+                        or first.y0 + first.height <= second.y0
+                        or second.y0 + second.height <= first.y0)
+
+        owner = np.full(occupied.shape, -1, dtype=np.int32)
+        owner[first.y0:first.y0 + first.height,
+              first.x0:first.x0 + first.width][first.mask] = 0
+        owner[second.y0:second.y0 + second.height,
+              second.x0:second.x0 + second.width][second.mask] = 1
+        party = build._party_walls(owner, 1, second.x0, second.y0,
+                                   second.mask, [1, 1])
+
+        self.assertTrue(party)
+        plan = layout.build_building(second.width, second.height, kind="shed",
+                                     party=party, seed=4).storeys[0]
+        self.assertTrue(plan.doors)
+        self.assertTrue(set(party).isdisjoint(plan.doors))
 
 
 if __name__ == "__main__":
