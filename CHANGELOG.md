@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.6
 
 - **One setting can be changed without making the map again** (`app.py`,
   `static/js/app.js`, `templates/index.html`). Turning the woodland up meant
@@ -129,8 +129,6 @@
   from a whole converted copy of the bitmap (8.7 s and gigabytes on a big map, now
   2 s and 33 MB, same answer); `ROOM_CAP_PER` listed `janitor` twice, and dead
   variables went from the lift-shaft and largest-rectangle code.
-
-## Unreleased (regional architecture)
 
 - **Chinese maps are built the Chinese way** (`knoxbuild/regional.py`, new;
   `knoxbuild/build.py`, `knoxbuild/settings.py`, `app.py`, `static/js/app.js`).
