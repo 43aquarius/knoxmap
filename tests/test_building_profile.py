@@ -1,6 +1,9 @@
 import unittest
+import random
 
+from knoxbuild import build, layout
 from knoxbuild.profile import BuildingProfile
+from knoxbuild.settings import Settings
 
 
 class BuildingProfileTests(unittest.TestCase):
@@ -35,6 +38,19 @@ class BuildingProfileTests(unittest.TestCase):
         self.assertGreater(old_worn.floor_weight("civic_worn"),
                            old_worn.floor_weight("wood_pale"))
         self.assertLess(new_clean.clutter, old_worn.clutter)
+
+    def test_garage_tags_generate_garage_rooms_and_industrial_shells(self):
+        for value in ("garage", "garages"):
+            with self.subTest(building=value):
+                self.assertEqual(build.classify_building({"building": value}),
+                                 "garage")
+
+        plan = layout.build_plan(12, 10, kind="garage", commercial=True, seed=8)
+        self.assertTrue(plan.rooms)
+        self.assertEqual({room.kind for room in plan.rooms}, {"garage"})
+        shell = build.pick_style(build.STYLE_AS["garage"], 20, 30,
+                                 random.Random(8), Settings(), density=0.2)
+        self.assertTrue(shell["name"].startswith("industrial"))
 
 
 if __name__ == "__main__":

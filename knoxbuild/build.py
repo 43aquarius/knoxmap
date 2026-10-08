@@ -125,6 +125,7 @@ SPECIAL_BY_VALUE = {
     "mall": "mall", "department_store": "mall",
     "industrial": "industrial", "warehouse": "industrial",
     "factory": "industrial", "works": "industrial", "manufacture": "industrial",
+    "garage": "garage", "garages": "garage", "car_repair": "garage",
     "barn": "barn", "farm": "barn", "farm_auxiliary": "barn",
     "greenhouse": "barn", "stable": "barn", "cowshed": "barn",
     "hospital": "medical", "clinic": "medical", "doctors": "medical",
@@ -180,6 +181,7 @@ SPECIAL_BY_NAME = [
 # - the skyline is what tells you whether you are downtown or in the suburbs.
 DEFAULT_LEVELS = {
     "industrial": (1, 1),
+    "garage": (1, 1),
     "barn": (1, 1),
     "shed": (1, 1),
     "church": (1, 1),
@@ -338,7 +340,7 @@ def row_units(fp, special: str | None, btag: str, n_uses: int,
 # SPECIAL_STYLES), dressed as the nearest kind that has: an army base is
 # built like a works, a station or a library like any other public building.
 STYLE_AS = {"military": "industrial", "fire": "industrial",
-            "police": "civic", "library": "civic"}
+            "garage": "industrial", "police": "civic", "library": "civic"}
 
 
 # A footprint this big, with nothing but building=yes on it, is a block of
@@ -486,6 +488,13 @@ def classify_building(tags: dict) -> str | None:
         if needle in name:
             return kind
     return None
+
+
+def _business_kind(special: str | None, uses: list[tuple[str, str]]) -> str | None:
+    """Promote retail outlines containing a mapped car-repair business to a garage."""
+    if special in (None, "shop") and ("mechanic", "storage") in uses:
+        return "garage"
+    return special
 
 
 # A public building has no wall style of its own, so it fell through to the
@@ -870,7 +879,8 @@ def _road_weight(out_dir: str, map_name: str, proj,
     weight = np.zeros(ground.shape[:2], dtype=np.int8)
     for colour in (C.PALE_CONCRETE,):
         weight[same_colour(ground, colour)] = 1
-    for colour in (C.MEDIUM_ASPHALT, C.DARKEST_ASPHALT, C.DARK_POTHOLE, C.LIGHT_POTHOLE):
+    for colour in (C.DARK_ASPHALT, C.MEDIUM_ASPHALT, C.LIGHT_ASPHALT,
+                   C.DARKEST_ASPHALT, C.DARK_POTHOLE, C.LIGHT_POTHOLE):
         weight[same_colour(ground, colour)] = 2
     if road_hierarchy is not None:
         # The mask includes each road's sidewalk width. Larger road classes
@@ -1035,12 +1045,13 @@ def _make_one(job: tuple) -> tuple:
     furniture, error): a building that cannot be laid out is left out with the
     reason, instead of stopping the other two thousand."""
     (w, h, levels, commercial, seed, kind, mask, settings, style, label, path, street, retail,
-        uses, hotel, entrances, profile, mapped, party) = job
+        uses, hotel, entrances, profile, mapped, garage_door, party) = job
     try:
         plan = build_building(w, h, levels=levels, commercial=commercial, seed=seed,
                               kind=kind, mask=mask, settings=settings, street=street,
                               retail=retail, uses=uses, hotel=hotel, party=party,
-                              entrances=entrances, profile=profile, mapped=mapped)
+                              entrances=entrances, profile=profile,
+                              mapped=mapped, garage_door=garage_door)
         text = render_tbx(plan, label, style)
     except Exception:  # noqa: BLE001
         import traceback
@@ -1281,9 +1292,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     # into the same cell layers, so where two cover a square only one survives.
     lots = np.zeros((proj.height, proj.width), dtype=bool)
     # Knox County roads: every building upright, and stood clear of the roads.
-    straight = bool(settings.straight_roads or info.get("straight_roads"))
-    road_weight = (_road_weight(out_dir, map_name, proj, road_hierarchy)
-                   if straight or road_hierarchy is not None else None)
+    road_weight = _road_weight(out_dir, map_name, proj, road_hierarchy)
 
     # Biggest footprints claim their tiles first. Where two real buildings
     # share a wall, one of them has to give up that row of tiles, and it should
@@ -1428,6 +1437,9 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # offices mapped as points inside it.
         inside = [tags] + _points_inside(points, px, points_taken)
         uses = uses_of(inside)
+        special = _business_kind(special, uses)
+        if special == "garage":
+            sheds += 1
         entrance_points = _entrances_inside(points, px)
         hotel = is_hotel(inside)
         if ("gasstore", "storage") in uses:
@@ -1546,7 +1558,9 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                          context.density(cx, cy) >= RETAIL_DENSITY,
                          # What the ground floor really is, and a hotel's rooms.
                          unit_uses, hotel, entrances_by_unit[n], profile,
-                         unit_mapped[n]))
+                         unit_mapped[n],
+                         btag in ("garage", "garages")
+                         or special in ("garage", "fire")))
             outline = px if len(units) == 1 else [
                 (ux0, uy0), (ux0 + uw, uy0), (ux0 + uw, uy0 + uh), (ux0, uy0 + uh)]
             decided.append((fname, label, ux0, uy0, uw, uh, unit, outline, special,
@@ -1624,6 +1638,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
             "furniture": furniture,
             "commercial": int(commercial),
             "kind": special or "house",
+            "building": btag,
             "style": style["name"],
             "shaped": int(mask is not None),
             "angle": round(fp.angle, 1),

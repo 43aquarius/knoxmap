@@ -26,6 +26,7 @@ from PIL import Image
 
 from generator import pz_colors as C
 
+from . import catalog
 from .bitmaps import read_rgb, same_colour
 from .structures import CELL, render_tiles_tbx
 
@@ -58,10 +59,14 @@ DRUMS = ["location_military_generic_01_14", "location_military_generic_01_15",
 DUMP_EVERY_M = 26.0        # a stack of stores about this often across the site
 DUMP_MIN_M2 = 400          # sites smaller than this get nothing
 MAX_DUMPS = 600
+PICNIC_SPACING_M = 38.0
+PICNIC_MIN_M2 = 500
+MAX_PICNIC_TABLES = 300
 
 LAYER = "Furniture"
-# Ground a prop never stands on: the carriageway, and water.
-ROAD = {C.MEDIUM_ASPHALT, C.DARKEST_ASPHALT, C.DARK_POTHOLE, C.LIGHT_POTHOLE}
+# Ground a prop never stands on: the carriageway, its pavement, and water.
+ROAD = {C.DARK_ASPHALT, C.MEDIUM_ASPHALT, C.LIGHT_ASPHALT, C.DARKEST_ASPHALT,
+    C.PALE_CONCRETE, C.DARK_POTHOLE, C.LIGHT_POTHOLE}
 BLOCKED = ROAD | {C.WATER}
 
 
@@ -105,12 +110,13 @@ def place_props(out_dir: str, map_name: str, bdir: str, occupied: np.ndarray,
     from .world import Placement
 
     bmp = os.path.join(out_dir, f"{map_name}.bmp")
-    counts = {"graves": 0, "dumps": 0}
+    counts = {"graves": 0, "dumps": 0, "picnic_tables": 0}
     if not os.path.exists(bmp) or areas is None:
         return [], counts
     cemeteries = _polygons(areas, "cemetery")
     bases = _polygons(areas, "military")
-    if not cemeteries and not bases:
+    parks = _polygons(areas, "park") + _polygons(areas, "playground")
+    if not cemeteries and not bases and not parks:
         return [], counts
 
     ground = read_rgb(bmp)
@@ -185,6 +191,41 @@ def place_props(out_dir: str, map_name: str, bdir: str, occupied: np.ndarray,
                     placed += bool(put(px, py, tile))
                 if placed:
                     counts["dumps"] += 1
+
+    pitch = step(PICNIC_SPACING_M)
+    for poly in parks:
+        if counts["picnic_tables"] >= MAX_PICNIC_TABLES:
+            break
+        if poly.area * metres_per_tile * metres_per_tile < PICNIC_MIN_M2:
+            continue
+        minx, miny, maxx, maxy = poly.bounds
+        x_start = int(minx) + pitch // 2
+        y_start = int(miny) + pitch // 2
+        for gy, y in enumerate(range(y_start, int(maxy), pitch)):
+            for gx, x in enumerate(range(x_start, int(maxx), pitch)):
+                if counts["picnic_tables"] >= MAX_PICNIC_TABLES:
+                    break
+                if rng.random() >= 0.72:
+                    continue
+                cx = x + rng.randint(-max(1, pitch // 5), max(1, pitch // 5))
+                cy = y + rng.randint(-max(1, pitch // 5), max(1, pitch // 5))
+                orient = ("W", "N")[(gx + gy + rng.randrange(2)) % 2]
+                definition = catalog.FURNITURE["picnic_table"][orient]
+                footprint = []
+                for offset, tile in definition.items():
+                    dx, dy = (int(value) for value in offset.split(","))
+                    px, py = cx + dx, cy + dy
+                    if (not (0 <= px < width and 0 <= py < height)
+                            or blocked[py, px]
+                            or not poly.contains(Point(px + 0.5, py + 0.5))):
+                        footprint = []
+                        break
+                    footprint.append((px, py, tile))
+                if len(footprint) != len(definition):
+                    continue
+                for px, py, tile in footprint:
+                    put(px, py, tile)
+                counts["picnic_tables"] += 1
 
     if not tiles:
         return [], counts

@@ -427,6 +427,7 @@ SPECIAL_MIXES = {
                     "garage"],
                    ["warehouse", "storage"]),
     "barn":       (["warehouse", "storage", "garage"], ["warehouse", "storage"]),
+    "garage":     (["garage"], ["garage"]),
     # A base's buildings: army stores (the game's army loot), offices,
     # dormitory rooms, a mess kitchen.
     "military":   (["armystorage", "office", "bedroom", "armystorage",
@@ -1158,12 +1159,60 @@ def _house_bedrooms_on_floor(bedrooms: int, levels: int, level: int) -> int:
     return each + (level < remainder)
 
 
+def _house_open_plan_share(profile) -> float:
+    if profile is None:
+        return 0.0
+    era_share = {"prewar": 0.03, "midcentury": 0.12, "modern": 0.28}
+    share = era_share.get(profile.era, 0.08) * (0.75 + 0.5 * profile.wealth)
+    return min(0.38, share + (0.04 if profile.setting == "urban" else 0.0))
+
+
+def _house_dining_share(profile) -> float:
+    if profile is None:
+        return DINING_ROOM_SHARE
+    era_factor = {"prewar": 1.45, "midcentury": 1.0, "modern": 0.65}
+    return min(0.3, DINING_ROOM_SHARE
+               * era_factor.get(profile.era, 1.0)
+               * (0.75 + 0.5 * profile.wealth))
+
+
+def _house_study_share(profile) -> float:
+    if profile is None:
+        return 1.0
+    share = 0.25 + 0.45 * profile.wealth
+    if profile.era == "modern":
+        share += 0.12
+    if profile.wear >= 0.75:
+        share -= 0.08
+    return max(0.1, min(0.9, share))
+
+
+def _merge_house_open_plan(plan: Plan, living_id: int, kitchen_id: int) -> bool:
+    living, kitchen = plan.rooms[living_id - 1], plan.rooms[kitchen_id - 1]
+    side_by_side = (living.y0 == kitchen.y0 and living.y1 == kitchen.y1
+                    and (living.x1 + 1 == kitchen.x0 or kitchen.x1 + 1 == living.x0))
+    stacked = (living.x0 == kitchen.x0 and living.x1 == kitchen.x1
+               and (living.y1 + 1 == kitchen.y0 or kitchen.y1 + 1 == living.y0))
+    if not (side_by_side or stacked):
+        return False
+    living.x0, living.y0 = min(living.x0, kitchen.x0), min(living.y0, kitchen.y0)
+    living.x1, living.y1 = max(living.x1, kitchen.x1), max(living.y1, kitchen.y1)
+    living.kind = "openplan"
+    for y in range(plan.height):
+        for x in range(plan.width):
+            if plan.grid[y][x] == kitchen_id:
+                plan.grid[y][x] = living_id
+    kitchen.kind = None
+    _renumber(plan)
+    return True
+
+
 # Where you walk when you are not in a room. Knox County's houses have a hall
 # in 42% of them and a living room in nearly all, and everything opens off one
 # or the other; ours had no circulation upstairs at all, so a floor of bedrooms
 # was a chain of them - the commonest door in the whole town was one bedroom
 # into the next.
-CIRCULATION = {"hall", "lobby", "livingroom", "concourse"}
+CIRCULATION = {"hall", "lobby", "livingroom", "openplan", "concourse"}
 
 
 def _landing(plan: Plan, adj: dict, free: list,
@@ -1267,7 +1316,7 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
             # 13% of its houses, the rest eating in the kitchen or the living
             # room. Taking one whenever there was a room to spare gave ours
             # one in 93%.
-            if near and len(free) >= 3 and rng.random() < DINING_ROOM_SHARE:
+            if near and len(free) >= 3 and rng.random() < _house_dining_share(plan.profile):
                 take(max(near, key=lambda i: area[i]), "dining")
         if free and level in bathroom_floors and (levels == 1 or len(free) >= 2):
             take(min(free, key=lambda i: area[i]), "bathroom")
@@ -1290,7 +1339,8 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
             elif area[i] <= SMALL_ROOM_TILES:
                 kinds[i] = "closet"
             elif n == bedroom_count:
-                kinds[i] = "office"
+                kinds[i] = ("office" if rng.random() < _house_study_share(plan.profile)
+                            else "storage")
             else:
                 kinds[i] = HOUSE_SPARE[(n - bedroom_count - 1) % len(HOUSE_SPARE)]
     else:
@@ -1317,12 +1367,20 @@ def _assign_house_kinds(plan: Plan, level: int, levels: int,
             elif level == 1 and n == bedroom_count:
                 kinds[i] = "laundry"
             elif n == bedroom_count:
-                kinds[i] = "office"
+                kinds[i] = ("office" if rng.random() < _house_study_share(plan.profile)
+                            else "storage")
             else:
                 kinds[i] = HOUSE_SPARE[(n - bedroom_count - 1) % len(HOUSE_SPARE)]
 
     for i, kind in kinds.items():
         plan.rooms[i - 1].kind = kind
+    if level == 0 and rng.random() < _house_open_plan_share(plan.profile):
+        living = next((i for i, room in enumerate(plan.rooms, 1)
+                       if room.kind == "livingroom"), None)
+        kitchen = next((i for i, room in enumerate(plan.rooms, 1)
+                        if room.kind == "kitchen"), None)
+        if living is not None and kitchen is not None:
+            _merge_house_open_plan(plan, living, kitchen)
 SHOP_BACK_ROOMS = ["storage", "office", "storage"]
 # A shop's back rooms take this share of its depth, within these many tiles.
 SHOP_BACK_SHARE = 0.3
@@ -2379,7 +2437,7 @@ def _along(length: int, rng: random.Random | None) -> int:
 TOGETHER = [{"livingroom", "kitchen"}, {"kitchen", "dining"},
             {"livingroom", "dining"}]
 # A flat's front door, by the room it opens into.
-FRONT_DOOR_COST = {"livingroom": 0.0, "hall": 0.5, "kitchen": 1.5,
+FRONT_DOOR_COST = {"livingroom": 0.0, "openplan": 0.0, "hall": 0.5, "kitchen": 1.5,
                    "dining": 1.5, "storage": 6.0, "bedroom": 7.0,
                    "bathroom": 12.0, "motelroom": 0.0}
 
@@ -2461,7 +2519,7 @@ def _doors(plan: Plan, rng: random.Random) -> None:
              if k[0] not in sealed and k[1] not in sealed}
 
     def start_room() -> int:
-        for kind in ("hall", "lobby", "livingroom"):
+        for kind in ("hall", "lobby", "livingroom", "openplan"):
             found = [i for i, r in enumerate(rooms, 1) if r.kind == kind]
             if found:
                 return max(found, key=lambda i: rooms[i - 1].area)
@@ -2676,6 +2734,36 @@ def _exterior_door(plan: Plan, rng: random.Random,
         return
 
 
+def _widen_vehicle_entry(plan: Plan, street: str | None) -> None:
+    """Turn the street-facing garage entry into a three-tile door opening."""
+    candidates = []
+    for room_id in range(1, len(plan.rooms) + 1):
+        for side, wall in _outside_runs(plan, room_id):
+            for door in plan.doors:
+                if door in wall:
+                    candidates.append((side == (street or "S"), len(wall),
+                                       door, wall))
+    if not candidates:
+        return
+    _faces_street, _length, entry, wall = max(candidates)
+    width = min(3, len(wall))
+    center = wall.index(entry)
+    start = min(max(0, center - width // 2), len(wall) - width)
+    opening = wall[start:start + width]
+    ordered = [entry] + sorted((edge for edge in opening if edge != entry),
+                               key=lambda edge: (abs(wall.index(edge) - center), edge))
+
+    doors = []
+    inserted = False
+    for door in plan.doors:
+        if door == entry and not inserted:
+            doors.extend(ordered)
+            inserted = True
+        elif door not in opening:
+            doors.append(door)
+    plan.doors = doors
+
+
 def _entrance_priority(entrance: tuple[float, float, dict]) -> tuple:
     """Main and accessible entrances take precedence when choosing the front."""
     tags = entrance[2]
@@ -2826,6 +2914,7 @@ def _back_door(plan: Plan, street: str | None = None) -> None:
 # sixteen tiles for flats) left city blocks looking like warehouses.
 FACADE_SPACING = {
     "house": (3, 4), "apartment": (3, 3), "barn": (10, 20), "shed": (12, 24),
+    "garage": (12, 24),
     "industrial": (6, 9), "shop": (3, 5), "restaurant": (3, 5),
     "civic": (2, 2), "school": (3, 3), "church": (4, 5), "medical": (3, 3),
 }
@@ -2858,12 +2947,13 @@ DEFAULT_ROOM_WINDOW_CAP = 4
 # it - a stockroom or washroom on an office front still has its window - so
 # only these are capped. Limiting bathrooms and storerooms as in a house left
 # a third of an office block's bays empty, holes all over the grid.
-SERVICE_WINDOW_CAP = {"garage": 0, "elevator": 0, "shed": 1}
+SERVICE_WINDOW_CAP = {"garage": 0, "mechanic": 0, "elevator": 0, "shed": 1}
 # Rooms that must not be left without daylight.
 # Kept to the rooms that matter: guaranteeing every office and dining room a
 # window as well pushed facades back up to 1.09 windows per ten tiles of wall.
 # Those rooms still get windows from the bays; they just are not promised one.
-LIVED_IN = {"livingroom", "bedroom", "kidsbedroom", "kitchen", "classroom", "restaurant"}
+LIVED_IN = {"livingroom", "openplan", "bedroom", "kidsbedroom", "kitchen",
+            "classroom", "restaurant"}
 MIN_WALL_FOR_WINDOW = 3
 # What "a shelf" is, by the room it stands in.
 #
@@ -3963,6 +4053,10 @@ def _furnish(plan: Plan, rng: random.Random,
         office = r.kind == "office" and plan.kind not in HOUSE_LIKE_KINDS
         eatery = r.kind in interiors.DINING_ROOMS
         commercial_kitchen = r.kind in interiors.COMMERCIAL_KITCHENS
+        if r.kind in ("garage", "mechanic") and interiors.furnish_service_bay(
+                plan, idx, r, rng, door_tiles, keep_clear,
+                mechanic=(r.kind == "mechanic")):
+            continue
         if office:
             base = interiors.furnish_office(plan, idx, r, rng, occupied, keep_clear)
         elif eatery:
@@ -4332,6 +4426,10 @@ FLOOR_CHOICES = {
 # are one tile and nothing else - and the offices it does carpet are left
 # uncarpeted here on purpose.
 KIND_FLOOR_CHOICES = {
+    "garage": {
+        "garage": ["tile_grey", "civic_scuff"],
+        "mechanic": ["tile_grey", "civic_scuff"],
+    },
     "school": {
         "classroom":    ["wood_pale", "school_pale", "school_warm"],
         "secondaryclassroom": ["wood_pale", "school_pale"],
@@ -4883,7 +4981,8 @@ def build_building(width: int, height: int, levels: int = 1,
                    party: dict | None = None,
                    entrances: list[tuple[float, float, dict]] | None = None,
                    profile: object | None = None,
-                   mapped: list | None = None) -> Building:
+                   mapped: list | None = None,
+                   garage_door: bool = False) -> Building:
     """Lay out a building of `levels` storeys.
 
     `retail` puts shops on the ground floor of a block of flats, as on any
@@ -4963,6 +5062,8 @@ def build_building(width: int, height: int, levels: int = 1,
                    party={e for e, up in (party or {}).items() if lvl < up})
         for lvl in range(levels)
     ]
+    if garage_door and storeys:
+        _widen_vehicle_entry(storeys[0], street)
     building = Building(width=width, height=height, storeys=storeys, profile=profile)
     if stairs is not None:
         for lvl in range(levels - 1):
@@ -5214,6 +5315,11 @@ def build_plan(width: int, height: int, commercial: bool = False,
         _shop_rooms(plan, rng, street)
     elif mix_kind == "mall":
         _mall_rooms(plan, rng, target, level)
+    elif mix_kind == "garage":
+        room_kind = ("mechanic" if any(front == "mechanic"
+                                       for front, _back in (uses or ()))
+                     else "garage")
+        plan.rooms.append(Room(0, 0, width - 1, height - 1, kind=room_kind))
     else:
         # A house floor gets one bathroom-sized room; anything else cut this
         # way - a factory floor, a civic building - has no bathroom to put in
@@ -5246,6 +5352,8 @@ def build_plan(width: int, height: int, commercial: bool = False,
         if kind == "restaurant" and not uses:
             uses = [("restaurantdining", "restaurantkitchen")]
         _assign_shop_floor(plan, rng, street, uses, several=(kind == "retail"))
+    elif mix_kind == "garage":
+        pass
     elif mix_kind and mix_kind in SPECIAL_MIXES:
         mix, fill = SPECIAL_MIXES[mix_kind]
         # A room whose kind is already decided - the mall concourse - keeps

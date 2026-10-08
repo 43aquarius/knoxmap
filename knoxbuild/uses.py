@@ -94,6 +94,7 @@ SHOP_USES = {
     "hardware": ("toolstore", "storage"), "doityourself": ("toolstore", "storage"),
     "trade": ("toolstore", "storage"), "tools": ("toolstore", "storage"),
     "car_parts": ("toolstore", "storage"), "paint": ("toolstore", "storage"),
+    "car_repair": ("mechanic", "storage"),
     "laundry": ("laundry", "storage"), "dry_cleaning": ("laundry", "storage"),
     "general": ("generalstore", "storage"),
 }

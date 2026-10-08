@@ -89,7 +89,7 @@ class BuildingProfile:
             wealth = 0.28
         elif kind in {"hotel", "civic", "medical"} or building in {"hotel", "office", "commercial"}:
             wealth = 0.62
-        elif kind in {"industrial", "barn", "shed", "military"} or setting == "rural":
+        elif kind in {"industrial", "barn", "shed", "garage", "military"} or setting == "rural":
             wealth = 0.38
         else:
             wealth = 0.48

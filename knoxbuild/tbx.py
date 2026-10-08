@@ -119,7 +119,8 @@ ROOF_AC_EVERY = 90
 ROOF_VENT_EVERY = 60
 
 
-def _rooftop(grid: list[list[int]], width: int, height: int) -> list[tuple[str, int, int, str]]:
+def _rooftop(grid: list[list[int]], width: int, height: int,
+             seed: str | int = 0) -> list[tuple[str, int, int, str]]:
     import random
 
     tiles = [(x, y) for y in range(1, height - 1) for x in range(1, width - 1)
@@ -127,7 +128,7 @@ def _rooftop(grid: list[list[int]], width: int, height: int) -> list[tuple[str, 
     area = sum(1 for row in grid for v in row if v)
     if area < ROOF_MIN_TILES or not tiles:
         return []
-    rng = random.Random(width * 7919 + height * 104729 + area)
+    rng = random.Random(f"{seed}:{width}:{height}:{area}")
     wanted = (["roof_hatch"] + ["roof_ac"] * max(1, area // ROOF_AC_EVERY)
               + ["roof_vent"] * (area // ROOF_VENT_EVERY))
     taken: set[tuple[int, int]] = set()
@@ -318,7 +319,8 @@ def render_tbx(plan: Plan | Building, name: str,
         entries.append({"category": "roof_caps", "tiles": cap})
         roof_cap_idx = len(entries)
 
-    rooftop = [] if peaked else _rooftop(storeys[-1].grid, building.width, building.height)
+    rooftop = [] if peaked else _rooftop(
+        storeys[-1].grid, building.width, building.height, name)
     # Which furniture roles this building actually uses, in first-use order.
     roles: list[str] = []
     for storey in storeys:

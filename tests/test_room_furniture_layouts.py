@@ -3,6 +3,7 @@ import unittest
 from collections import Counter
 
 from knoxbuild import layout
+from knoxbuild.profile import BuildingProfile
 
 
 class RoomFurnitureLayouts(unittest.TestCase):
@@ -91,6 +92,50 @@ class RoomFurnitureLayouts(unittest.TestCase):
         mat_cells = layout._cells_for(mat[0], mat[1], mat[2], mat[3])
         self.assertTrue(any(abs(tx - mx) + abs(ty - my) == 1
                             for tx, ty in tub_cells for mx, my in mat_cells))
+
+    def test_open_plan_merges_only_full_aligned_living_and_kitchen_rooms(self):
+        rooms = [layout.Room(0, 0, 3, 5, kind="livingroom"),
+                 layout.Room(4, 0, 7, 5, kind="kitchen"),
+                 layout.Room(0, 6, 7, 8, kind="bedroom")]
+        grid = [[1] * 4 + [2] * 4 for _ in range(6)] + [[3] * 8 for _ in range(3)]
+        plan = layout.Plan(8, 9, rooms=rooms, grid=grid)
+
+        self.assertTrue(layout._merge_house_open_plan(plan, 1, 2))
+
+        self.assertEqual(len(plan.rooms), 2)
+        self.assertEqual(plan.rooms[0].kind, "openplan")
+        self.assertEqual(plan.grid[:6], [[1] * 8 for _ in range(6)])
+        self.assertEqual(plan.grid[6:], [[2] * 8 for _ in range(3)])
+
+    def test_home_profile_varies_open_plan_dining_and_study_chances(self):
+        older = BuildingProfile.infer(
+            {"start_date": "1920", "class": "working_class"},
+            "house", 0.16, 168, 1, 42)
+        modern = BuildingProfile.infer(
+            {"start_date": "1988", "class": "luxury"},
+            "house", 0.2, 168, 1, 41)
+
+        self.assertGreater(layout._house_open_plan_share(modern),
+                           layout._house_open_plan_share(older))
+        self.assertGreater(layout._house_dining_share(older),
+                           layout._house_dining_share(modern))
+        self.assertGreater(layout._house_study_share(modern),
+                           layout._house_study_share(older))
+
+    def test_modern_home_can_be_open_plan_without_making_old_homes_uniform(self):
+        older = BuildingProfile.infer(
+            {"start_date": "1920", "class": "working_class"},
+            "house", 0.16, 168, 1, 42)
+        modern = BuildingProfile.infer(
+            {"start_date": "1988", "class": "luxury"},
+            "house", 0.2, 168, 1, 41)
+        old_building = layout.build_building(
+            14, 12, seed=0, kind="house", profile=older)
+        new_building = layout.build_building(
+            14, 12, seed=0, kind="house", profile=modern)
+
+        self.assertNotIn("openplan", {room.kind for room in old_building.rooms})
+        self.assertIn("openplan", {room.kind for room in new_building.rooms})
 
     def test_extra_hall_bridges_unserved_room_clusters(self):
         rooms = [layout.Room(0, 3, 2, 5), layout.Room(3, 3, 5, 5),
