@@ -384,6 +384,113 @@ def check_dwellings(check) -> None:
           f"bathrooms, {beds / 12:.0f} bedrooms per building)")
 
 
+def check_split_large(check) -> None:
+    """A building past max_size is cut into units that fit, not dropped.
+
+    footprint.place refuses on the real polygon's long side before claiming
+    a single tile; build.py answers "large" by placing again without that
+    one gate and cutting the footprint down in row_units. The factory and
+    the hangar are the landmarks a place is known by, and dropping them
+    left a hole exactly where the eye looks.
+    """
+    import numpy as np
+
+    from knoxbuild.build import row_units
+    from knoxbuild.footprint import place
+
+    ring = [(10.0, 10.0), (510.0, 10.0), (510.0, 90.0), (10.0, 90.0),
+            (10.0, 10.0)]
+    fp, why = place(ring, np.zeros((600, 600), dtype=bool), max_side=200)
+    whole, why2 = place(ring, np.zeros((600, 600), dtype=bool), max_side=1e9)
+    # A quarter-metre a tile: the area rule stops before 200 tiles here, so
+    # only the cap can bring this footprint in (tests/test_split_large_buildings).
+    units = row_units(whole, "industrial", "industrial", 0, 0.25,
+                      max_side=200) if whole else []
+    longest = max((max(u.width, u.height) for u in units), default=0)
+    check(fp is None and why == "large" and whole is not None and why2 == "ok"
+          and len(units) > 1 and longest <= 200
+          and sum(u.tiles for u in units) == whole.tiles,
+          f"a building past max_size is cut into units that fit, not dropped "
+          f"({len(units)} units, longest side {longest})")
+
+
+def check_mapped_rooms(check) -> None:
+    """Rooms the mapper drew are the rooms the floor is cut into.
+
+    OSM indoor=room ways are attached to their building when the map is
+    rendered, moved with the placed footprint, and cut into the ground floor
+    (renderer._buildings_geojson, knoxbuild.build, layout._mapped_rooms) -
+    so a school surveyed room by room keeps its classrooms instead of the
+    BSP guessing. The rest of the floor and every floor above is cut as ever.
+    """
+    from knoxbuild.layout import build_plan
+
+    mapped = [([(2, 2), (9, 2), (9, 7), (2, 7), (2, 2)], "classroom"),
+              ([(13, 3), (18, 3), (18, 7), (13, 7), (13, 3)], "bathroom")]
+    plan = build_plan(40, 24, kind="civic", seed=5, mapped=mapped)
+    found = {(r.x0, r.y0, r.x1, r.y1): r.kind for r in plan.rooms}
+    covered = all(all(row) for row in plan.grid)
+    upper = build_plan(40, 24, kind="civic", seed=5, ground=False,
+                       mapped=mapped)
+    plain = build_plan(40, 24, kind="civic", seed=5, ground=False)
+    one_floor = ([(r.x0, r.y0, r.x1, r.y1, r.kind) for r in upper.rooms]
+                 == [(r.x0, r.y0, r.x1, r.y1, r.kind) for r in plain.rooms])
+    from knoxbuild.layout import MIN_ROOM
+
+    def drawn(rect, kind):
+        """A room of this kind that is the drawn one: it holds the rectangle, and
+        any more of it is a sliver too thin to be a room, merged in as every
+        such leftover is (two rows above the classroom here)."""
+        x0, y0, x1, y1 = rect
+        return any(r.kind == kind and r.x0 <= x0 and r.y0 <= y0 and r.x1 >= x1 and r.y1 >= y1
+                   and x0 - r.x0 < MIN_ROOM and y0 - r.y0 < MIN_ROOM
+                   and r.x1 - x1 < MIN_ROOM and r.y1 - y1 < MIN_ROOM for r in plan.rooms)
+
+    check(drawn((2, 2, 9, 7), "classroom") and drawn((13, 3, 18, 7), "bathroom")
+          and len(plan.rooms) > len(mapped) and covered and one_floor,
+          f"rooms the mapper drew are the floor's own rooms "
+          f"({len(plan.rooms)} rooms, kinds kept, upper floor untouched)")
+
+
+def check_giant_outline(check, work: str) -> None:
+    """A building past max_size is kept, and does not cost the buildings inside it.
+
+    Placed first (largest first), the giant outline claimed every tile in it and
+    the house standing inside came out "taken"; where 1.5.2 left the outline out
+    and kept the house. Outlines past max_size are placed after the rest."""
+    import csv
+
+    from generator import renderer
+    from knoxbuild.build import MAX_OVERSIZE_TILES, build
+    from knoxbuild.settings import Settings
+
+    def box(s, w, n, e):
+        return [(s, w), (s, e), (n, e), (n, w), (s, w)]
+
+    giant = box(SOUTH + 0.0004, WEST + 0.0004, SOUTH + 0.0044, WEST + 0.0064)    # ~440 x 480 m
+    house = box(SOUTH + 0.0022, WEST + 0.0030, SOUTH + 0.00245, WEST + 0.00335)  # ~28 x 21 m
+    feats = [OSMFeature(next(_ids), "way", {"building": "yes"}, giant),
+             OSMFeature(next(_ids), "way", {"building": "house"}, house)]
+    out = os.path.join(work, "giant")
+    renderer.render(feats, SOUTH, WEST, NORTH, EAST, meters_per_tile=1.0,
+                    output_dir=out, map_name="giant")
+    with contextlib.redirect_stdout(io.StringIO()):
+        build(out, settings=Settings(seed=1, true_map=1))
+    rows = list(csv.DictReader(open(os.path.join(out, "giant_placements.csv"), encoding="utf-8")))
+    proj = renderer.Projector.build(SOUTH, WEST, NORTH, EAST, 1.0)
+    hx, hy = proj.to_px(SOUTH + 0.002325, WEST + 0.003175)
+
+    def holds(r):
+        x, y, w, h = (int(r[k]) for k in ("tile_x", "tile_y", "width", "height"))
+        return x <= hx < x + w and y <= hy < y + h
+
+    inside = [r for r in rows if holds(r)]
+    check(len(rows) > 4, f"a building past max_size is kept, cut into units ({len(rows)} buildings)")
+    check(any(int(r["width"]) <= 40 and int(r["height"]) <= 40 for r in inside),
+          "and the house standing inside it is kept as well")
+    check(MAX_OVERSIZE_TILES > 0, "and there is a limit to how large an outline is kept")
+
+
 def check_street_zombies(check) -> None:
     """Zombies where the streets are, not only inside the buildings: a town
     mapped without its houses used to come out empty."""
@@ -2253,6 +2360,816 @@ def check_no_size_wall(check, work: str) -> None:
           "and the numbers behind the warnings are still there to warn with")
 
 
+def check_repeatable_seeds(check) -> None:
+    """Two processes must pick the same floors and trims for one building: the
+    seeds were hash() of a string, which Python randomises per process."""
+    import subprocess
+
+    code = ("from knoxbuild.tbx import _stable_seed; "
+            "print(_stable_seed('Selftest House', 7, 9, 'trim'), "
+            "_stable_seed('Selftest House', 12, 7, 9))")
+    seen = set()
+    for hashseed in ("1", "2", "random"):
+        env = {**os.environ, "PYTHONHASHSEED": hashseed}
+        got = subprocess.run([sys.executable, "-c", code], env=env,
+                             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             capture_output=True, text=True).stdout.strip()
+        seen.add(got)
+    check(len(seen) == 1 and "" not in seen,
+          "a building's floor and trim seeds are the same in every process")
+
+
+def check_compile_records(check, work: str) -> None:
+    """The compile's record of what it compiled is only kept while it is true."""
+    import numpy as np
+
+    import knoxlog
+    import knoxstop
+    import knoxbuild.repair as repair
+    from tools import compile_map as compiler
+    from tools import compile_state as cs
+
+    project = Path(work) / "records"
+    (project / "lots").mkdir(parents=True)
+    (project / "tmx").mkdir()
+    (project / "buildings").mkdir()
+    Image.fromarray(np.zeros((600, 600, 3), dtype=np.uint8)).save(
+        project / "records.bmp", format="BMP")
+    (project / "buildings" / "a.tbx").write_text("one")
+    cell = '<cell x="{x}" y="{y}" map="">\n <lot x="1" y="1" level="0" width="2" height="2" map="buildings/a.tbx"/>\n</cell>\n'
+    (project / "records.pzw").write_text(
+        '<world version="1.0" width="2" height="2">\n<worldOrigin origin="70,0"/>\n'
+        '<bmp path="records.bmp" x="0" y="0" width="2" height="2"/>\n'
+        + "".join(cell.format(x=x, y=y) for x in range(2) for y in range(2))
+        + "</world>", encoding="utf-8")
+    exe = project / "PZWorldEd_cli"
+    exe.write_text("", encoding="utf-8")
+
+    ran: list = []
+    explode = [False]
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    def fake(cmd, should_stop, started):
+        arg = [a for a in cmd if a.startswith("--cells=")][0]
+        box = tuple(int(v) for v in arg[len("--cells="):].split(","))
+        ran.append(box)
+        if explode[0]:
+            raise knoxstop.Stopped("the compile")
+        cells = {(x, y) for x in range(box[0], box[2] + 1) for y in range(box[1], box[3] + 1)}
+        for lx, ly in cs.lot_files_of(cells, (70, 0)):
+            (project / "lots" / f"{lx}_{ly}.lotheader").write_text("new")
+        return Done()
+
+    keep = {n: getattr(compiler, n) for n in ("_run_batch",)}
+    keep_saved, keep_repair = knoxlog.save_tool_output, repair.repair_project
+    compiler._run_batch = fake
+    knoxlog.save_tool_output = lambda *a, **k: None
+    repair.repair_project = lambda pzw: {"changed": 0, "moved": 0, "dropped": []}
+    try:
+        compiler.compile_map(str(project), batch=1, exe=str(exe), workers=1)
+        check(cs.load(project) is not None and len(ran) == 4,
+              "a compile that finishes leaves a record, having run every batch")
+
+        ran.clear()
+        compiler.compile_map(str(project), batch=1, exe=str(exe), workers=1)
+        check(not ran, "and with nothing changed the next one starts no batch at all")
+
+        (project / "lots" / "84_2.lotheader").write_text("old")
+        compiler.compile_map(str(project), batch=1, exe=str(exe), workers=1,
+                             only_cells=[[0, 0, 0, 0]], fresh=True)
+        check((project / "lots" / "84_2.lotheader").read_text() == "old",
+              "starting from scratch does not apply to a retry of just some cells")
+
+        (project / "buildings" / "a.tbx").write_text("two")
+        ran.clear()
+        explode[0] = True
+        try:
+            compiler.compile_map(str(project), batch=1, exe=str(exe), workers=1)
+        except knoxstop.Stopped:
+            pass
+        check(ran and cs.load(project) is None,
+              "a compile that stops part way leaves no record of the lots it half changed")
+        explode[0] = False
+        compiler.compile_map(str(project), batch=1, exe=str(exe), workers=1)
+        check(cs.load(project) is not None, "and the next one that finishes writes it again")
+    finally:
+        compiler._run_batch = keep["_run_batch"]
+        knoxlog.save_tool_output = keep_saved
+        repair.repair_project = keep_repair
+
+
+def check_odd_requests(check, work: str) -> None:
+    """Requests with the wrong kind of value in them are answered, not crashed on,
+    and a download that fails leaves no folder behind."""
+    import app as knoxapp
+
+    def no_download(*_a, **_k):
+        raise RuntimeError("the network is off in this test")
+
+    was_fetch, was_out = knoxapp.osm.fetch_features_tiled, knoxapp.OUTPUT_DIR
+    knoxapp.osm.fetch_features_tiled = no_download
+    knoxapp.OUTPUT_DIR = Path(work) / "odd_output"
+    knoxapp.OUTPUT_DIR.mkdir()
+    try:
+        client = knoxapp.app.test_client()
+        box = {"south": 40.0, "west": 20.0, "north": 40.01, "east": 20.01}
+        statuses = [client.post("/api/generate", json={**box, "mapName": what}).status_code
+                    for what in (7, ["x"], {"a": 1}, True)]
+        check(set(statuses) == {502},
+              f"a map name that is not text is replaced by one, not a crash ({statuses})")
+        check(not any(knoxapp.OUTPUT_DIR.iterdir()),
+              "and a download that fails leaves no folder in output/")
+        check(all(client.post("/api/client-error", json=v).status_code == 200
+                  for v in ("x", 5, [], None)),
+              "the page's error report is taken whatever it sends")
+    finally:
+        knoxapp.osm.fetch_features_tiled = was_fetch
+        knoxapp.OUTPUT_DIR = was_out
+
+
+def check_osm_parse_tolerant(check) -> None:
+    """One bad element in an Overpass answer is skipped, not the end of the tile."""
+    from generator import osm
+
+    pt = {"lat": 1.0, "lon": 2.0}
+    cases = {
+        "a null point in a way": {"elements": [{"type": "way", "id": 1, "geometry": [pt, None, pt]}]},
+        "a way with null geometry": {"elements": [{"type": "way", "id": 1, "geometry": None}]},
+        "a null point in a relation": {"elements": [{"type": "relation", "id": 2, "members": [
+            {"role": "outer", "geometry": [pt, None, {"lat": 1, "lon": 3}, pt]}]}]},
+        "a point with no latitude": {"elements": [{"type": "way", "id": 1, "geometry": [{"lon": 2.0}]}]},
+        "an element with no id": {"elements": [{"type": "way", "geometry": [pt, pt]}]},
+        "null members": {"elements": [{"type": "relation", "id": 2, "members": None}]},
+        "null elements": {"elements": None},
+        "an answer that is not an object": [],
+    }
+    failed = []
+    for what, payload in cases.items():
+        try:
+            osm._parse(payload)
+        except Exception as exc:  # noqa: BLE001
+            failed.append(f"{what}: {type(exc).__name__}")
+    check(not failed, "an Overpass answer with nulls and gaps in it is still read"
+                      + (f" (failed: {failed})" if failed else ""))
+    good = osm._parse({"elements": [{"type": "way", "id": 1, "geometry": [pt, None, {"lat": 3, "lon": 4}]},
+                                    "junk", {"type": "way", "id": 2, "geometry": [pt, pt]}]})
+    check(len(good) == 2 and len(good[0].geometry) == 2,
+          "and what is there is kept: the good points of a way, and the elements around it")
+
+
+def check_osm_cache(check, work: str) -> None:
+    """A cached download that is damaged is a miss, and a save cannot leave half a file."""
+    import gzip
+    import json as _json
+
+    from generator import osm
+
+    path = os.path.join(work, "osm_cache", "area.json.gz")
+    bbox = (1.0, 2.0, 3.0, 4.0)
+    feats = [osm.OSMFeature(i, "way", {"building": "yes"}, [(1, 2), (2, 3), (3, 4)])
+             for i in range(500)]
+    osm.save_cache(path, bbox, feats)
+    check(len(osm.load_cache(path, bbox)) == 500 and not os.path.exists(path + ".part"),
+          "a saved download comes back whole, with no half-written file beside it")
+    whole = open(path, "rb").read()
+    good_header = {"filters": osm.FILTERS_VERSION, "bbox": list(bbox)}
+    damaged = {
+        "cut short by a crash": whole[:len(whole) // 2],
+        "not a gzip file at all": b"nope",
+        "empty": b"",
+        "a list rather than an object": gzip.compress(b"[1, 2]"),
+        "an entry with a field missing": gzip.compress(_json.dumps(
+            {**good_header, "features": [{"kind": "way"}]}).encode()),
+        "a feature that is not an object": gzip.compress(_json.dumps(
+            {**good_header, "features": ["x"]}).encode()),
+    }
+    worked = []
+    for what, data in damaged.items():
+        with open(path, "wb") as fh:
+            fh.write(data)
+        try:
+            if osm.load_cache(path, bbox) is not None:
+                worked.append(what)
+        except Exception as exc:  # noqa: BLE001
+            worked.append(f"{what} raised {type(exc).__name__}")
+    check(not worked, "a damaged cache file is read as 'not cached', never as an error"
+                      + (f" (not so: {worked})" if worked else ""))
+
+    class Boom(Exception):
+        pass
+
+    good_before = os.path.join(work, "osm_cache", "keep.json.gz")
+    osm.save_cache(good_before, bbox, feats[:3])
+    was_dump = osm.json.dump
+    osm.json.dump = lambda *a, **k: (_ for _ in ()).throw(Boom())
+    try:
+        osm.save_cache(good_before, bbox, feats)
+    except Boom:
+        pass
+    finally:
+        osm.json.dump = was_dump
+    check(len(osm.load_cache(good_before, bbox)) == 3 and not os.path.exists(good_before + ".part"),
+          "a save that fails part way leaves the earlier file as it was")
+
+
+def check_config_file(check, work: str) -> None:
+    """The settings file survives being damaged, and being written twice at once."""
+    import json as _json
+    import threading
+
+    import knoxpaths
+
+    was = knoxpaths.CONFIG_PATH
+    knoxpaths.CONFIG_PATH = Path(work) / "config_test.json"
+    try:
+        for what, text in (("a list", "[1, 2]"), ("null", "null"), ("a string", '"x"'),
+                           ("cut short", '{"pz_install": "C:/Games/Zomb'), ("empty", "")):
+            knoxpaths.CONFIG_PATH.write_text(text, encoding="utf-8")
+            if knoxpaths.load_config() != {}:
+                check(False, f"{what} should read as no settings at all")
+                break
+        else:
+            check(True, "a settings file that is not an object reads as no settings")
+        knoxpaths.CONFIG_PATH.write_text(_json.dumps({"pz_install": "C:/Games/PZ"}), encoding="utf-8")
+        knoxpaths.update_config({"language": "english"})
+        knoxpaths.update_config({"auto_update": False})
+        got = knoxpaths.load_config()
+        check(got == {"pz_install": "C:/Games/PZ", "language": "english", "auto_update": False}
+              and not Path(str(knoxpaths.CONFIG_PATH) + ".tmp").exists(),
+              "changing one setting keeps the rest, and False is kept as False")
+        threads = [threading.Thread(target=knoxpaths.update_config, args=({f"key{i}": i},))
+                   for i in range(40)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        got = knoxpaths.load_config()
+        check(all(got.get(f"key{i}") == i for i in range(40)),
+              "forty changes made at once are all kept")
+    finally:
+        knoxpaths.CONFIG_PATH = was
+
+
+def check_install_clears(check, work: str) -> None:
+    """Installing over an old copy that cannot be removed stops, rather than mixing the two."""
+    import shutil as _shutil
+
+    from tools import make_map_mod
+
+    old = Path(work) / "old_install"
+    (old / "sub").mkdir(parents=True)
+    (old / "sub" / "1_1.lotheader").write_text("old")
+    make_map_mod._clear_folder(str(old))
+    check(not old.exists(), "an old installed copy is removed before the new one goes in")
+
+    stuck = Path(work) / "stuck_install"
+    stuck.mkdir()
+    (stuck / "5_5.lotheader").write_text("old")
+    was = _shutil.rmtree
+    make_map_mod.shutil.rmtree = lambda *a, **k: None       # a folder the game holds open
+    try:
+        try:
+            make_map_mod._clear_folder(str(stuck), tries=1)
+            said = ""
+        except RuntimeError as exc:
+            said = str(exc)
+    finally:
+        make_map_mod.shutil.rmtree = was
+    check("could not be removed" in said and "Close Project Zomboid" in said and stuck.exists(),
+          "and one that cannot be removed is reported, with what to do about it")
+
+
+def check_odd_tags(check) -> None:
+    """Heights and storeys come from free text on OpenStreetMap; none of it may stop a build."""
+    from knoxbuild.build import levels_from_tags
+    from knoxbuild.settings import Settings
+
+    settings = Settings()
+    worst = ["inf", "-inf", "Infinity", "nan", "1e999", "-1e999", "1e308", "9" * 400, "", " ",
+             "-3", "0", "3;4", "3,5", "3 floors", "x", "40'", "12 ft", "0x10", "1_0"]
+    bad = []
+    for key in ("building:levels", "levels", "height", "building:height", "est_height"):
+        for value in worst:
+            try:
+                got = levels_from_tags({key: value}, settings)
+            except Exception as exc:  # noqa: BLE001
+                bad.append(f"{key}={value!r}: {type(exc).__name__}")
+                continue
+            if got is not None and not 1 <= got <= settings.max_levels:
+                bad.append(f"{key}={value!r}: {got} storeys")
+    for key in ("roof:levels", "min_height"):
+        for value in worst:
+            for base in ({"building:levels": "2"}, {"height": "20"}):
+                try:
+                    levels_from_tags({**base, key: value}, settings)
+                except Exception as exc:  # noqa: BLE001
+                    bad.append(f"{key}={value!r}: {type(exc).__name__}")
+    from generator import renderer, structures
+    from generator.osm import OSMFeature
+
+    for value in worst:
+        try:
+            structures._storeys({"height": value}, 2)
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"structures height={value!r}: {type(exc).__name__}")
+        for key in ("width", "est_width", "lanes"):
+            way = OSMFeature(1, "way", {"highway": "residential", key: value}, [(1, 2), (1, 3)])
+            try:
+                got = renderer._way_width_m(way, "road_minor")
+            except Exception as exc:  # noqa: BLE001
+                bad.append(f"road {key}={value!r}: {type(exc).__name__}")
+                continue
+            if value in ("nan", "inf", "-inf", "Infinity") and key != "lanes" \
+                    and got != renderer._way_width_m(OSMFeature(1, "way", {"highway": "residential"}, []), "road_minor"):
+                bad.append(f"road {key}={value!r} made a {got} m road")
+    proj = renderer.Projector.build(SOUTH, WEST, NORTH, EAST, 1.0)
+    for value in worst:
+        try:
+            structures.level_of({"layer": value, "highway": "residential"})
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"layer={value!r}: {type(exc).__name__}")
+        try:
+            renderer._places([OSMFeature(1, "node", {"place": "town", "population": value},
+                                         [(SOUTH, WEST)])], proj)
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"population={value!r}: {type(exc).__name__}")
+    check(not bad, "no height or storey tag, however odd, raises" + (f" ({bad[:4]})" if bad else ""))
+    check(levels_from_tags({"building:levels": "3;4"}, settings) == 3
+          and levels_from_tags({"height": "12"}, settings) == 4
+          and levels_from_tags({"building:levels": "inf", "height": "12"}, settings) == 4,
+          "and a tag that is not a number falls through to the next one that is")
+
+
+def check_degenerate_footprints(check) -> None:
+    """A footprint with too few points is too small, not an error."""
+    import numpy as np
+
+    from knoxbuild.footprint import place
+
+    occupied = np.zeros((40, 40), dtype=bool)
+    said = []
+    for points in ([], [(5, 5)], [(5, 5), (9, 9)], [(5, 5), (5, 5), (5, 5)]):
+        try:
+            said.append(place(points, occupied, min_side=3)[1])
+        except Exception as exc:  # noqa: BLE001
+            said.append(type(exc).__name__)
+    check(said == ["small"] * 4, f"a footprint of no, one, two or repeated points is 'small' ({said})")
+
+
+def check_car_park_stalls(check) -> None:
+    """Walking only the part of a car park that is on the map tries the same stalls."""
+    import random as _random
+
+    from knoxbuild.build import CAR_PARK_LANE, STALL_H, STALL_W, car_park_stalls
+
+    def original(bounds, w, h):
+        x0, y0, x1, y1 = bounds
+        across = (x1 - x0) >= (y1 - y0)
+        sw, sh = (STALL_W, STALL_H) if across else (STALL_H, STALL_W)
+        for a in range(0, (y1 - y0 if across else x1 - x0), CAR_PARK_LANE):
+            for row in (0, STALL_H):
+                for b in range(0, (x1 - x0 if across else y1 - y0), STALL_W):
+                    x, y = (x0 + b, y0 + a + row) if across else (x0 + a + row, y0 + b)
+                    if not (0 <= x and x + sw <= w and 0 <= y and y + sh <= h):
+                        continue
+                    yield x, y, sw, sh
+
+    rng = _random.Random(5)
+    differ = 0
+    for _ in range(3000):
+        w, h = rng.randint(8, 400), rng.randint(8, 400)
+        x0, y0 = rng.randint(-300, 450), rng.randint(-300, 450)
+        bounds = (x0, y0, x0 + rng.randint(1, 500), y0 + rng.randint(1, 500))
+        if list(original(bounds, w, h)) != list(car_park_stalls(bounds, w, h)):
+            differ += 1
+    check(differ == 0, f"a car park is tried at the same stalls, in the same order, as before ({differ} of 3000 differ)")
+    import time as _time
+    t0 = _time.time()
+    n = sum(1 for _ in car_park_stalls((-10 ** 6, -10 ** 6, 10 ** 6, 10 ** 6), 300, 300))
+    check(_time.time() - t0 < 2 and n > 0,
+          f"and one the size of a continent is walked in no time ({_time.time() - t0:.2f} s)")
+
+
+def check_prop_lattice(check) -> None:
+    """Props are laid on the part of a polygon that is on the map, on the same lattice."""
+    import random as _random
+    import time as _time
+
+    from knoxbuild.props import lattice_on_map
+
+    rng = _random.Random(9)
+    differ = 0
+    for _ in range(5000):
+        step = rng.randint(1, 40)
+        first = rng.randint(-900, 600)
+        stop = first + rng.randint(0, 1200)
+        limit = rng.randint(1, 700)
+        naive = [v for v in range(first, stop, step) if 0 <= v < limit]
+        if list(lattice_on_map(first, stop, step, limit)) != naive:
+            differ += 1
+    check(differ == 0, f"the lattice of a polygon is walked only where it is on the map, "
+                       f"at the same points ({differ} of 5000 differ)")
+    t0 = _time.time()
+    n = len(lattice_on_map(-10 ** 9, 10 ** 9, 3, 500))
+    check(_time.time() - t0 < 1 and n == len(range((-10 ** 9) % 3, 500, 3)),
+          f"and a polygon a thousand kilometres across costs nothing ({n} points)")
+
+
+def check_ground_shares(check, work: str) -> None:
+    """The street and water shares of the ground come out as they did, read a strip at a time."""
+    import numpy as np
+
+    from generator import pz_colors as _C
+    from knoxbuild import bitmaps, population
+
+    rng = np.random.default_rng(3)
+    palette = np.array([_C.WATER, _C.MEDIUM_ASPHALT, _C.PALE_CONCRETE, _C.DARK_GRASS,
+                        _C.PAVING, _C.DARK_POTHOLE], dtype=np.uint8)
+    chunk = population.CHUNK
+    gw, gh = 9, 7
+    ground = palette[rng.integers(0, len(palette), (gh * chunk + 3, gw * chunk + 5))]
+    path = os.path.join(work, "ground_shares.bmp")
+    Image.fromarray(ground).save(path, format="BMP")
+
+    def whole(path: str):
+        """The way it was done: the whole picture converted, then cut."""
+        paved = np.zeros((gh, gw))
+        water = np.zeros((gh, gw))
+        with Image.open(path) as img:
+            full = np.asarray(img.convert("RGB"))
+        for y in range(gh):
+            for x in range(gw):
+                cell = full[y * chunk:(y + 1) * chunk, x * chunk:(x + 1) * chunk]
+                paved[y, x] = np.logical_or.reduce(
+                    [np.all(cell == c, axis=2) for c in population.STREET_COLOURS]).mean()
+                water[y, x] = np.all(cell == np.array(_C.WATER), axis=2).mean()
+        return paved, water
+
+    was = population.GROUND_STRIP_CHUNKS
+    population.GROUND_STRIP_CHUNKS = 3          # several strips, the last one short
+    try:
+        got = population._ground_shares(path, gw, gh)
+    finally:
+        population.GROUND_STRIP_CHUNKS = was
+    expected = whole(path)
+    check(np.allclose(got[0], expected[0]) and np.allclose(got[1], expected[1]),
+          "the share of each chunk that is street or water is the same read a strip at a time")
+    rows = bitmaps.read_rgb_rows(path, 10, 40, 50)
+    check(np.array_equal(rows, ground[10:40, :50]),
+          "and a strip of rows read from a bitmap is those rows of the picture")
+
+
+def check_street_angle(check) -> None:
+    """The angle a map is turned to is the grid on the map, found to a fraction of a degree."""
+    from generator import renderer
+
+    south, west, north, east = 40.0, 20.0, 40.02, 20.026
+    proj = renderer.Projector.build(south, west, north, east, 1.0)
+    ids = iter(range(1, 10 ** 6))
+
+    def street(p0, p1):
+        return renderer.OSMFeature(next(ids), "way", {"highway": "residential"},
+                                   [proj.to_latlon(*p0), proj.to_latlon(*p1)])
+
+    def clip(p0, p1, x0, y0, x1, y1):
+        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+        t0, t1 = 0.0, 1.0
+        for p, q in ((-dx, p0[0] - x0), (dx, x1 - p0[0]), (-dy, p0[1] - y0), (dy, y1 - p0[1])):
+            if p == 0:
+                if q < 0:
+                    return None
+            else:
+                t = q / p
+                t0, t1 = (max(t0, t), t1) if p < 0 else (t0, min(t1, t))
+        return None if t0 >= t1 else ((p0[0] + t0 * dx, p0[1] + t0 * dy), (p0[0] + t1 * dx, p0[1] + t1 * dy))
+
+    def grid(angle, x0, y0, x1, y1, spacing=60):
+        a = math.radians(angle)
+        u, v = (math.cos(a), -math.sin(a)), (math.sin(a), math.cos(a))
+        cx, cy, reach = (x0 + x1) / 2, (y0 + y1) / 2, max(x1 - x0, y1 - y0)
+        out = []
+        for k in range(-int(reach / spacing), int(reach / spacing) + 1):
+            for d, e in ((u, v), (v, u)):
+                o = (cx + e[0] * k * spacing, cy + e[1] * k * spacing)
+                seg = clip((o[0] - d[0] * reach, o[1] - d[1] * reach),
+                           (o[0] + d[0] * reach, o[1] + d[1] * reach), x0, y0, x1, y1)
+                if seg:
+                    out.append(street(*seg))
+        return out
+
+    def turned(feats):
+        return renderer.dominant_road_angle(feats, south, west, north, east)
+
+    w, h = proj.width, proj.height
+    errs = []
+    for ang in (3, 22.5, 44, -30):
+        got, strength = turned(grid(ang, 0, 0, w, h))
+        errs.append(abs(got - ang) < 0.5 and strength > 0.9)
+    check(all(errs), "a street grid is found to within half a degree, whichever way it runs")
+    two, _s = turned(grid(30, 0, 0, w * 0.65, h) + grid(0, w * 0.7, 0, w, h))
+    check(abs(two - 30) < 0.5, "and where two districts meet, the one with more street decides")
+    inside = grid(20, 0, 0, w, h)
+    both, _s = turned(inside + grid(0, -3000, -3000, -50, h + 3000))
+    check(abs(both - 20) < 0.5,
+          "a bigger grid in the margin beyond the map does not turn the map to its own angle")
+    from generator import osm as _osm
+    check(len(_osm._points([{"lat": float("nan"), "lon": 20.0}, {"lat": 1.0, "lon": 2.0}])) == 1,
+          "and a point with no real coordinates is dropped on the way in")
+    check(turned([]) == (0.0, 0.0), "a map with no streets has no angle")
+
+
+def check_throttle(check) -> None:
+    """The compile eases off when WorldEd fails under load, and only so far."""
+    import threading
+    import time as _time
+
+    from tools.compile_map import Throttle
+
+    t = Throttle(4)
+    check(t.limit == 4 and t.ease() == 3, "the compile gives up a slot after a failure")
+    check(t.ease() is None and t.limit == 3,
+          "a burst of failures from one overload counts once")
+    t._eased_at = 0.0
+    check(t.ease() == 2, "and again if it still fails a while later")
+    one = Throttle(1)
+    check(one.ease() is None and one.limit == 1, "but never below one")
+
+    # A slot held by a batch keeps the next one waiting, and the limit it waits
+    # under is whatever it is by then.
+    t = Throttle(2)
+    t.acquire()
+    t.acquire()
+    got = []
+    waiter = threading.Thread(target=lambda: (t.acquire(), got.append(1)), daemon=True)
+    waiter.start()
+    _time.sleep(0.3)
+    check(not got, "a third batch waits while two are running")
+    t.release()
+    waiter.join(3)
+    check(got == [1], "and starts as soon as one ends")
+
+
+def check_saved_areas(check, work: str) -> None:
+    """Saved areas: kept by name, checked on the way in, gone when deleted."""
+    import app as knoxapp
+
+    was = knoxapp.PRESETS_FILE
+    knoxapp.PRESETS_FILE = Path(work) / "presets_test.json"
+    try:
+        client = knoxapp.app.test_client()
+        body = {"name": "Old town", "south": 40.0, "west": 20.0, "north": 40.01,
+                "east": 20.01, "metersPerTile": 2, "shape": None,
+                "settings": {"preset": "default", "seed": 7, "tree_density": 0.5}}
+        check(client.get("/api/presets").get_json()["presets"] == [],
+              "no saved areas to begin with")
+        saved = client.post("/api/presets", json=body)
+        check(saved.status_code == 200, "an area is saved under a name")
+        got = client.get("/api/presets").get_json()["presets"]
+        check(len(got) == 1 and got[0]["name"] == "Old town"
+              and got[0]["metersPerTile"] == 2 and got[0]["settings"]["seed"] == 7,
+              "and comes back with its scale and settings")
+        client.post("/api/presets", json={**body, "metersPerTile": 4})
+        got = client.get("/api/presets").get_json()["presets"]
+        check(len(got) == 1 and got[0]["metersPerTile"] == 4,
+              "saving under the same name replaces it")
+        poly = {"type": "Polygon", "coordinates": [[[20, 40], [20.01, 40], [20.01, 40.01], [20, 40]]]}
+        check(client.post("/api/presets", json={**body, "name": "Shape", "shape": poly})
+              .status_code == 200, "an outline can be saved")
+        for bad, why in (({**body, "name": " "}, "a blank name"),
+                         ({**body, "north": 39.0}, "an area upside down"),
+                         ({**body, "south": 95.0, "north": 96.0}, "an area off the map"),
+                         ({**body, "shape": {"type": "Point", "coordinates": [1, 2]}},
+                          "an outline that is not a polygon"),
+                         ({"name": "x"}, "no area at all")):
+            if client.post("/api/presets", json=bad).status_code != 400:
+                check(False, f"{why} should be refused")
+                break
+        else:
+            check(True, "a blank name, a bad area and a bad outline are refused")
+        check(client.delete("/api/presets/Old%20town").status_code == 200
+              and [p["name"] for p in client.get("/api/presets").get_json()["presets"]] == ["Shape"],
+              "a saved area can be deleted")
+        check(client.delete("/api/presets/Old%20town").status_code == 404,
+              "and deleting it again says it is not there")
+    finally:
+        knoxapp.PRESETS_FILE = was
+
+
+def check_health(check) -> None:
+    """The health check answers without the network, and says what the PC holds."""
+    import app as knoxapp
+
+    data = knoxapp.app.test_client().get("/api/health").get_json()
+    res = data.get("resources", {})
+    check(isinstance(data.get("checks"), list) and "compileWorkers" in res
+          and res["compileWorkers"] >= 1 and "overpass" not in data,
+          "the health check lists the setup and the PC's room, and leaves the network alone by default")
+
+
+def check_other_websites(check) -> None:
+    """A page on another website cannot make KnoxMap do things by posting to it."""
+    import app as knoxapp
+
+    client = knoxapp.app.test_client()
+
+    def post(**headers):
+        # /api/stop with no map name answers 400 and does nothing: a refusal is 403.
+        return client.post("/api/stop", json={}, headers=headers).status_code
+
+    check(post() == 400 and post(Origin="http://127.0.0.1:5000") == 400
+          and post(Origin="http://localhost:5000") == 400 and post(Origin="http://[::1]:5000") == 400,
+          "posts from KnoxMap's own page, and from tools with no Origin, are answered")
+    check(post(Origin="http://evil.example") == 403 and post(Origin="null") == 403
+          and post(Origin="http://127.0.0.1.evil.example") == 403,
+          "posts from other websites are refused")
+    check(post(**{"Sec-Fetch-Site": "cross-site"}) == 403
+          and client.get("/api/health", headers={"Origin": "http://evil.example"}).status_code == 200,
+          "and so is a cross-site post that sends no Origin, while reading stays open")
+
+
+def check_overpass_setting(check, work: str) -> None:
+    """The map data servers can be named in the window and are used at once."""
+    from pathlib import Path
+
+    import app as knoxapp
+    import knoxpaths
+    from generator import osm
+
+    was_path, was_urls = knoxpaths.CONFIG_PATH, list(osm.OVERPASS_ENDPOINTS)
+    knoxpaths.CONFIG_PATH = Path(work) / "config_overpass.json"
+    try:
+        client = knoxapp.app.test_client()
+        mine = "http://localhost:12345/api/interpreter"
+        r = client.post("/api/overpass", json={"endpoints": f"  {mine}\n{mine} "})
+        d = r.get_json()
+        check(r.status_code == 200 and d["endpoints"] == [mine] and d["using"] == [mine]
+              and osm.OVERPASS_ENDPOINTS == [mine],
+              "a server of your own is saved and used at once (duplicates and spaces dropped)")
+        check(client.get("/api/overpass").get_json()["endpoints"] == [mine],
+              "and read back from the config")
+        for bad in ("ftp://x/y", "not a url", {"a": 1}, ["javascript:alert(1)"]):
+            check(client.post("/api/overpass", json={"endpoints": bad}).status_code == 400,
+                  f"{str(bad)[:24]!r} is refused")
+        check(client.post("/api/overpass", json=[1]).get_json()["using"] == osm.OVERPASS_ENDPOINTS
+              and osm.OVERPASS_ENDPOINTS == list(osm._DEFAULT_ENDPOINTS),
+              "an empty answer goes back to the public servers")
+    finally:
+        knoxpaths.CONFIG_PATH = was_path
+        osm.set_endpoints(was_urls if was_urls != list(osm._DEFAULT_ENDPOINTS) else None)
+
+
+def check_workshop(check, work: str) -> None:
+    """The pre-upload check finds a missing credit, a bad id and a missing picture."""
+    import shutil
+
+    from tools import workshop_check as wc
+
+    root = os.path.join(work, "wmod", "My_Map")
+    shutil.rmtree(os.path.dirname(root), ignore_errors=True)
+    for where in ("", "common", "42"):
+        os.makedirs(os.path.join(root, where), exist_ok=True)
+        with open(os.path.join(root, where, "mod.info"), "w", encoding="utf-8") as f:
+            f.write("name=My Map\nid=My_Map\ndescription=A map. Map data (c) OpenStreetMap contributors (ODbL).\n")
+    maps = os.path.join(root, "common", "media", "maps", "My_Map")
+    os.makedirs(maps)
+    open(os.path.join(maps, "0_0.lotheader"), "wb").close()
+    open(os.path.join(maps, "map.info"), "w").close()
+    with open(os.path.join(root, "ATTRIBUTION.txt"), "w", encoding="utf-8") as f:
+        f.write("Map data (c) OpenStreetMap contributors, available under the Open Database License (ODbL)")
+
+    def levels():
+        res = wc.check(root)
+        return {r["level"] for r in res}, wc.summary(res)
+
+    lv, s = levels()
+    check("bad" not in lv and s["ready"] and s["warn"] == 1,
+          "a complete mod is ready, with only the missing preview picture to warn about")
+    Image.new("RGB", (300, 300)).save(os.path.join(root, "preview.png"))
+    lv, s = levels()
+    check(lv == {"ok"} and s["warn"] == 0, "and with a square preview it has nothing to say")
+    Image.new("RGB", (300, 200)).save(os.path.join(root, "preview.png"))
+    check(levels()[1]["warn"] == 1, "a preview that is not square is warned about")
+    with open(os.path.join(root, "preview.png"), "wb") as f:
+        f.write(b"not a png")
+    check(not levels()[1]["ready"], "a preview that is not a PNG stops it")
+    os.remove(os.path.join(root, "preview.png"))
+    with open(os.path.join(root, "ATTRIBUTION.txt"), "w", encoding="utf-8") as f:
+        f.write("made with KnoxMap")
+    check(not levels()[1]["ready"], "an attribution without the OpenStreetMap credit stops it")
+    os.remove(os.path.join(root, "ATTRIBUTION.txt"))
+    check(not levels()[1]["ready"], "no attribution file stops it")
+    with open(os.path.join(root, "mod.info"), "w", encoding="utf-8") as f:
+        f.write("name=x\nid=bad id!\ndescription=nothing\n")
+    check(not levels()[1]["ready"], "a mod id with odd characters and a copy that differs stop it")
+    check(not wc.summary(wc.check(os.path.join(work, "nowhere")))["ready"],
+          "a mod that is not installed is not ready")
+
+
+def check_compile_state(check, work: str) -> None:
+    """Working out which cells of a compiled map are out of date."""
+    import numpy as np
+
+    from knoxbuild import bitmaps
+    from tools import compile_state as cs
+
+    rng = np.random.default_rng(11)
+    rgb = rng.integers(0, 256, (130, 205, 3), dtype=np.uint8)
+    a_path, b_path = os.path.join(work, "cells_a.bmp"), os.path.join(work, "cells_b.bmp")
+    Image.fromarray(rgb).save(a_path, format="BMP")
+    changed = rgb.copy()
+    changed[75, 160] = 255 - changed[75, 160]            # one pixel, in cell (2, 1)
+    Image.fromarray(changed).save(b_path, format="BMP")
+    ha, hb = bitmaps.cell_hashes(a_path, 60), bitmaps.cell_hashes(b_path, 60)
+    check(len(ha) == 4 * 3 and bitmaps.cell_hashes(a_path, 60) == ha
+          and [k for k in ha if ha[k] != hb[k]] == [(2, 1)],
+          "one changed pixel changes the fingerprint of its own square and no other")
+    grey = rng.integers(0, 256, (70, 90), dtype=np.uint8)
+    g_path = os.path.join(work, "cells_g.bmp")
+    Image.fromarray(grey, "L").save(g_path, format="BMP")
+    check(len(bitmaps.cell_hashes(g_path, 30)) == 3 * 3, "and it reads a grey picture too")
+    step3 = bitmaps.read_rgb(a_path, step=3)
+    check(np.array_equal(step3, rgb[::3, ::3]), "a smaller picture of a bitmap is every third pixel")
+
+    check(cs.lot_files_of({(0, 0)}, (70, 0)) == {(82, 0), (82, 1), (83, 0), (83, 1)},
+          "a cell names the lot files that overlap it")
+
+    def record(terrain_edit=None, content_edit=None) -> dict:
+        t = {f"{x},{y}": f"t{x}{y}" for x in range(5) for y in range(5)}
+        c = {f"{x},{y}": f"c{x}{y}" for x in range(5) for y in range(5)}
+        t.update(terrain_edit or {})
+        c.update(content_edit or {})
+        return {"version": cs.VERSION, "global": "g", "origin": [70, 0],
+                "size": [5, 5], "terrain": t, "content": c}
+
+    base = record()
+    check(cs.plan(None, base, True) is None and cs.plan(base, base, False) is None,
+          "with no record, or nothing compiled, nothing is trusted")
+    check(cs.plan(base, {**base, "global": "other"}, True) is None,
+          "and a change to the rules or the compiler redoes everything")
+    same = cs.plan(base, record(), True)
+    check(same["changed"] == 0 and not same["lots"], "an unchanged map has nothing to redo")
+    one = cs.plan(base, record(content_edit={"0,0": "new"}), True)
+    check(one["changed"] == 1 and one["lots"] == {(0, 0), (1, 0), (0, 1), (1, 1)}
+          and not one["terrain"],
+          "a changed building in a corner redoes that cell and its neighbours, not the maps")
+    mid = cs.plan(base, record(terrain_edit={"2,2": "new"}), True)
+    check(len(mid["terrain"]) == 9 and len(mid["lots"]) == 9,
+          "changed ground redoes its map and its neighbours' too")
+
+    project = Path(work) / "statemap"
+    (project / "lots").mkdir(parents=True)
+    (project / "tmx").mkdir()
+    pzw = project / "statemap.pzw"
+    cell = '<cell x="{x}" y="{y}" map="C:/m/tmx/statemap_{tx}_{y}.tmx">\n</cell>\n'
+    pzw.write_text('<world version="1.0" width="2" height="2">\n'
+                   '<worldOrigin origin="70,0"/>\n<bmp path="statemap.bmp" x="0" y="0"/>\n'
+                   + "".join(cell.format(x=x, y=y, tx=70 + x)
+                             for x in range(2) for y in range(2)) + "</world>",
+                   encoding="utf-8")
+    for lx in range(82, 86):
+        for ly in range(0, 4):
+            for name in (f"{lx}_{ly}.lotheader", f"chunkdata_{lx}_{ly}.bin",
+                         f"world_{lx}_{ly}.lotpack"):
+                (project / "lots" / name).write_text("x")
+
+    def make_maps() -> None:
+        for x in range(2):
+            for y in range(2):
+                (project / "tmx" / f"statemap_{70 + x}_{y}.tmx").write_text("x")
+
+    make_maps()
+    # Ground changed somewhere: every map goes, because WorldEd does not make
+    # up a partial set (its log said 375 of 384), but only the changed cell's
+    # lot files.
+    gone = cs.discard(project, {"lots": {(0, 0)}, "terrain": {(0, 0)}}, (70, 0))
+    left = pzw.read_text(encoding="utf-8")
+    check(gone == {"lots": 12, "tmx": 4}
+          and not (project / "lots" / "82_0.lotheader").exists()
+          and (project / "lots" / "85_3.lotheader").exists()
+          and left.count('map=""') == 4 and ".tmx" not in left
+          and not list((project / "tmx").glob("*.tmx")),
+          "discarding takes just those cells' lot files, and every map when ground changed")
+    make_maps()
+    pzw.write_text(left.replace('map=""', 'map="C:/m/tmx/statemap_70_0.tmx"', 1),
+                   encoding="utf-8")
+    kept = cs.discard(project, {"lots": {(1, 1)}, "terrain": set()}, (70, 0))
+    check(kept["tmx"] == 0 and len(list((project / "tmx").glob("*.tmx"))) == 4
+          and "statemap_70_0.tmx" in pzw.read_text(encoding="utf-8"),
+          "and changes that are not to the ground leave the maps alone")
+    for lx in range(82, 86):
+        for ly in range(0, 4):
+            (project / "lots" / f"{lx}_{ly}.lotheader").write_text("x")
+    (project / "lots" / "84_1.lotheader").unlink()
+    check(cs.batch_needs_work(project, (1, 1, 1, 1), (70, 0), (2, 2))
+          and not cs.batch_needs_work(project, (0, 0, 0, 0), (70, 0), (2, 2)),
+          "a batch is run only when a lot file it would write is missing")
+    cs.wipe(project)
+    check(not any((project / "lots").iterdir()) and not any((project / "tmx").iterdir()),
+          "starting from scratch empties lots and maps")
+
+
 def check_big_bitmaps(check, work: str) -> None:
     """A map past Pillow's 179 Mpx bomb guard still opens, and the strip reader
     gives back exactly what Pillow does, at any width (BMP rows are padded)."""
@@ -2541,6 +3458,39 @@ def check_updater(check, work: str) -> None:
               and (base / "locked" / "module.py").exists()
               and (base / updater.VERSION_FILE).read_text().startswith("## 9.9"),
               "and the next start puts that update in")
+
+        # A failure part way through moving files in: whatever was already
+        # replaced goes back, so the install is not left half old and half new.
+        for name in ("one.py", "two.py", "three.py"):
+            (base / name).write_text(f"old {name}")
+        (base / updater.VERSION_FILE).write_text("## 1.0\n")
+        updater.MANIFEST.write_text(json.dumps({"version": "1.0", "files": []}))
+        mid_zip = update_dir / "KnoxMap-v9.9c.zip"
+        with zipfile.ZipFile(mid_zip, "w") as z:
+            for name in ("one.py", "two.py", "three.py", "four.py"):
+                z.writestr(f"KnoxMap/{name}", f"new {name}")
+            z.writestr(f"KnoxMap/{updater.VERSION_FILE}", "## 9.9\n")
+        updater.STAGED.write_text(json.dumps({"version": "9.9", "zip": str(mid_zip)}))
+        real_put = updater._put_in_place
+        calls = [0]
+
+        def breaks_on_third(src, dest, rel, budget):
+            calls[0] += 1
+            if calls[0] == 3:
+                raise OSError("a scanner has this one open")
+            return real_put(src, dest, rel, budget)
+
+        updater._put_in_place = breaks_on_third
+        try:
+            failed = not updater.apply_staged()
+        finally:
+            updater._put_in_place = real_put
+        check(failed
+              and all((base / n).read_text() == f"old {n}" for n in ("one.py", "two.py", "three.py"))
+              and not (base / "four.py").exists()
+              and (base / updater.VERSION_FILE).read_text().startswith("## 1.0")
+              and mid_zip.exists(),
+              "an update that fails part way through puts back the files it had replaced")
     finally:
         for k, v in saved.items():
             setattr(updater, k, v)
@@ -2621,10 +3571,48 @@ def main(argv: list[str]) -> int:
         check(trees > 20 and shrubs > 20, f"gardens planted ({trees} trees, {shrubs} shrubs)")
 
         print("buildings")
+        said: list = []
         with contextlib.redirect_stdout(io.StringIO()) as log:
-            build(out, settings=Settings(seed=1))
+            build(out, settings=Settings(seed=1),
+                  progress=lambda text, fraction: said.append((text, fraction)))
+        from knoxbuild import layout_preview
+        for layer in layout_preview.LAYERS:
+            png = layout_preview.render_to(out, layer)
+            with Image.open(png) as shown:
+                check(shown.size[0] > 100 and shown.size[1] > 100,
+                      f"the layout preview ({layer}) is drawn ({shown.size[0]}x{shown.size[1]})")
+        fractions = [f for _t, f in said if f is not None]
+        check(len(said) >= 5 and fractions == sorted(fractions) and fractions[-1] >= 0.9,
+              f"the building step reports its stages, in order ({len(said)} reports)")
         rows = open(os.path.join(out, "selftest_placements.csv"), encoding="utf-8").read().splitlines()
         check(len(rows) - 1 >= 60, f"buildings placed ({len(rows) - 1})")
+        # Building again reuses what is unchanged, and what it lays out afresh
+        # comes out the same: the cache is only worth having if it cannot
+        # change the map.
+        bdir = os.path.join(out, "buildings")
+
+        def tbx_bytes() -> dict:
+            return {n: open(os.path.join(bdir, n), "rb").read()
+                    for n in sorted(os.listdir(bdir)) if n.endswith(".tbx")}
+
+        first_tbx = tbx_bytes()
+        with contextlib.redirect_stdout(io.StringIO()) as again:
+            build(out, settings=Settings(seed=1))
+        check("reused" in again.getvalue() and tbx_bytes() == first_tbx,
+              "building again reuses every building and changes nothing")
+        gone = sorted(n for n in first_tbx if n.startswith("selftest_0"))[:3]
+        for n in gone:
+            os.remove(os.path.join(bdir, n))
+        with contextlib.redirect_stdout(io.StringIO()):
+            build(out, settings=Settings(seed=1))
+        check(tbx_bytes() == first_tbx,
+              f"a building laid out again comes out as it did ({len(gone)} deleted)")
+        with contextlib.redirect_stdout(io.StringIO()) as other:
+            build(out, settings=Settings(seed=2))
+        check("reused" not in other.getvalue(),
+              "a different seed reuses nothing")
+        with contextlib.redirect_stdout(io.StringIO()):
+            build(out, settings=Settings(seed=1))
         pzw_text = open(os.path.join(out, "selftest.pzw"), encoding="utf-8").read()
         size = re.search(r'<world version="[^"]*" width="(\d+)" height="(\d+)"', pzw_text)
         cells = [(int(a), int(b)) for a, b in re.findall(r'<cell x="(\d+)" y="(\d+)"', pzw_text)]
@@ -2670,6 +3658,9 @@ def main(argv: list[str]) -> int:
         check_1_3_6(check, out, tbx, pzw_text, log.getvalue())
         check_street_zombies(check)
         check_dwellings(check)
+        check_split_large(check)
+        check_mapped_rooms(check)
+        check_giant_outline(check, work)
         check_stop(check)
         check_portable(check)
         texts = [open(p, encoding="utf-8").read() for p in tbx]
@@ -2911,6 +3902,26 @@ def main(argv: list[str]) -> int:
         check_memory_guard(check)
         check_box_any(check)
         check_big_bitmaps(check, work)
+        check_repeatable_seeds(check)
+        check_throttle(check)
+        check_osm_parse_tolerant(check)
+        check_osm_cache(check, work)
+        check_config_file(check, work)
+        check_install_clears(check, work)
+        check_odd_tags(check)
+        check_degenerate_footprints(check)
+        check_car_park_stalls(check)
+        check_prop_lattice(check)
+        check_ground_shares(check, work)
+        check_street_angle(check)
+        check_odd_requests(check, work)
+        check_saved_areas(check, work)
+        check_health(check)
+        check_other_websites(check)
+        check_overpass_setting(check, work)
+        check_workshop(check, work)
+        check_compile_state(check, work)
+        check_compile_records(check, work)
 
         print("error log")
         import zipfile

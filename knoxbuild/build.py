@@ -224,6 +224,32 @@ SHOP_FRONTAGE_M = 13.0
 # mappers use them.
 TERRACE_TAGS = {"terrace", "terraced", "semidetached_house", "row_house"}
 
+# OpenStreetMap room= and amenity= values the game furnishes under a name of
+# their own. Rooms a mapper drew inside a building (indoor=room) arrive with
+# their tags, and where the tag names something Knox County knows, the room is
+# built as that instead of guessed from its size (layout._mapped_rooms).
+MAPPED_ROOM_KINDS = {
+    "bedroom": "bedroom",
+    "bathroom": "bathroom",
+    "toilet": "bathroom",
+    "kitchen": "kitchen",
+    "living_room": "livingroom",
+    "corridor": "hall",
+    "hallway": "hall",
+    "hall": "hall",
+    "lobby": "lobby",
+    "classroom": "classroom",
+    "office": "office",
+    "storage": "storage",
+    "utility": "storage",
+    "laundry": "laundry",
+    "closet": "closet",
+    "wardrobe": "closet",
+    "library": "library",
+    "laboratory": "schoollab",
+    "stairs": "hall",
+}
+
 
 # And a building too big to be one building whatever it is.
 #
@@ -233,23 +259,45 @@ TERRACE_TAGS = {"terrace", "terraced", "semidetached_house", "row_house"}
 # out. Past this it is cut into blocks that stand wall to wall, which is what
 # a shopping centre or a works of that size is anyway.
 BIG_BUILDING_M2 = 6000.0
+# A footprint past settings.max_size is kept and cut into units instead of
+# dropped, but not without limit: a polygon this many tiles in area (about a
+# square kilometre at one metre a tile) comes to hundreds of units, each laid
+# out as a building of its own, and is a campus or an airfield mapped as one
+# building rather than a building. Past it the old answer stands: left out.
+MAX_OVERSIZE_TILES = 1_200_000
 
 
-def _cut_big(units: list, metres_per_tile: float) -> list:
-    """Cut anything left that is still too big to be one building."""
+def _cut_big(units: list, metres_per_tile: float,
+             max_side: int | None = None) -> list:
+    """Cut anything left that is still too big to be one building.
+
+    `max_side`, passed only for a footprint placed past settings.max_size
+    (build.py, the "large" retry), is a hard cap on either side: the gate
+    that used to throw such a building away no longer ran, so it is cut down
+    to what the gate would have allowed instead. split_row leaves a piece
+    whole when round(length / unit) comes to 1, so the cut target is 2/3 of
+    the cap - a side over the cap is then always over 1.5 targets, which
+    always divides, and every piece lands inside the cap.
+    """
     import math
 
     from .footprint import split_row
 
     side = max(8, int(math.sqrt(BIG_BUILDING_M2) / max(0.05, metres_per_tile)))
     limit = side * side
+    cut = side if max_side is None else min(side, max(4, (2 * max_side) // 3))
+
+    def needs_cut(u) -> bool:
+        return (u.width * u.height > limit
+                or (max_side is not None and max(u.width, u.height) > max_side))
+
     out = list(units)
     for _ in range(4):
-        if all(u.width * u.height <= limit for u in out):
+        if all(not needs_cut(u) for u in out):
             break
         nxt = []
         for u in out:
-            nxt.extend(split_row(u, side) if u.width * u.height > limit else [u])
+            nxt.extend(split_row(u, cut) if needs_cut(u) else [u])
         if len(nxt) == len(out):
             break
         out = nxt
@@ -257,20 +305,25 @@ def _cut_big(units: list, metres_per_tile: float) -> list:
 
 
 def row_units(fp, special: str | None, btag: str, n_uses: int,
-              metres_per_tile: float):
-    """One footprint per unit of a row, or the footprint as it stands."""
+              metres_per_tile: float, max_side: int | None = None):
+    """One footprint per unit of a row, or the footprint as it stands.
+
+    `max_side` (see _cut_big) is passed only for a footprint that was too
+    wide for settings.max_size and placed anyway, to be cut into units that
+    fit rather than dropped.
+    """
     from .footprint import split_row
 
     if special not in ROW_KINDS and btag not in TERRACE_TAGS:
-        return _cut_big([fp], metres_per_tile)
+        return _cut_big([fp], metres_per_tile, max_side)
     long_side = max(fp.width, fp.height) * metres_per_tile
     short_side = min(fp.width, fp.height) * metres_per_tile
     if short_side < ROW_MIN_DEPTH_M or long_side < ROW_MIN_LENGTH_M:
-        return _cut_big([fp], metres_per_tile)
+        return _cut_big([fp], metres_per_tile, max_side)
     terrace = btag in TERRACE_TAGS
     if not terrace:
         if short_side > ROW_MAX_DEPTH_M or long_side < short_side * ROW_RATIO:
-            return _cut_big([fp], metres_per_tile)
+            return _cut_big([fp], metres_per_tile, max_side)
     frontage = UNIT_FRONTAGE_M.get(special or "house", SHOP_FRONTAGE_M)
     if n_uses > 1:
         # The shops mapped inside it say how many units there really are;
@@ -278,7 +331,7 @@ def row_units(fp, special: str | None, btag: str, n_uses: int,
         # two units of fifty metres.
         frontage = min(max(frontage, long_side / n_uses), frontage * 2)
     return _cut_big(split_row(fp, max(5, int(round(frontage / metres_per_tile)))),
-                    metres_per_tile)
+                    metres_per_tile, max_side)
 
 
 # Kinds with no walls and windows of their own (knoxbuild/catalog.py
@@ -338,6 +391,11 @@ def _number(raw: str | None) -> float | None:
     try:
         value = float(text)
     except ValueError:
+        return None
+    # float() reads "inf", "Infinity", "nan" and "1e999" as numbers. None of them
+    # is a height, and each one raised in the int() a few lines on - outside the
+    # per-building handling, so one such tag stopped the whole build.
+    if not math.isfinite(value):
         return None
     return value * 0.3048 if feet else value
 
@@ -526,6 +584,40 @@ def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
     return styles[idx]
 
 
+STALL_W, STALL_H = 3, 5
+CAR_PARK_LANE = 17            # two rows of 5, and a 7-tile lane
+
+
+def car_park_stalls(bounds: tuple[int, int, int, int], w: int, h: int):
+    """Where a stall could go in a car park with these bounds, as (x, y, sw, sh),
+    in the order they are tried - only the ones that lie on the map.
+
+    This used to walk the whole bounding box of the car park and throw away what
+    was off the map afterwards. A car park a few hundred metres past the edge
+    costs nothing; a polygon of the whole country mapped as one (it happens) was
+    hundreds of millions of steps. Starting each run at the first position that
+    can be on the map visits the same stalls in the same order."""
+    x0, y0, x1, y1 = bounds
+    across = (x1 - x0) >= (y1 - y0)          # rows run along the long side
+    sw, sh = (STALL_W, STALL_H) if across else (STALL_H, STALL_W)
+    # b runs along the rows, a across them; a + row is the offset of a stall's row.
+    b_origin, b_len, b_map = (x0, x1 - x0, w) if across else (y0, y1 - y0, h)
+    a_origin, a_len, a_map = (y0, y1 - y0, h) if across else (x0, x1 - x0, w)
+    lane = CAR_PARK_LANE
+    a_lo = max(0, -a_origin - STALL_H)
+    a_start = -(-a_lo // lane) * lane
+    a_stop = min(a_len, a_map - STALL_H - a_origin + 1)
+    b_lo = max(0, -b_origin)
+    b_start = -(-b_lo // STALL_W) * STALL_W
+    b_stop = min(b_len, b_map - STALL_W - b_origin + 1)
+    for a in range(a_start, a_stop, lane):
+        for row in (0, STALL_H):
+            for b in range(b_start, b_stop, STALL_W):
+                x, y = (x0 + b, y0 + a + row) if across else (x0 + a + row, y0 + b)
+                if 0 <= x and x + sw <= w and 0 <= y and y + sh <= h:
+                    yield x, y, sw, sh
+
+
 def _detect_zones(landscape_path: str, placements, rng_seed: int = 7,
                   settings: Settings | None = None, areas=None, drives=(),
                   keep_clear=(), road_hierarchy: np.ndarray | None = None):
@@ -593,29 +685,21 @@ def _detect_zones(landscape_path: str, placements, rng_seed: int = 7,
         lots = [shape for shape, props in areas._items if props.get("category") == "parking"]
         hard = ASPHALT | {C.PALE_CONCRETE, C.PAVING}
         for lot in lots:
-            x0, y0, x1, y1 = (int(v) for v in lot.bounds)
-            across = (x1 - x0) >= (y1 - y0)      # rows run along the long side
-            sw, sh = (STALL_W, STALL_H) if across else (STALL_H, STALL_W)
-            lane = 17                            # two rows of 5, and a 7-tile lane
-            for a in range(0, (y1 - y0 if across else x1 - x0), lane):
-                for row in (0, STALL_H):
-                    for b in range(0, (x1 - x0 if across else y1 - y0), STALL_W):
-                        x, y = (x0 + b, y0 + a + row) if across else (x0 + a + row, y0 + b)
-                        if not (0 <= x and x + sw <= w and 0 <= y and y + sh <= h):
-                            continue
-                        stall = box(x, y, x + sw, y + sh)
-                        if not lot.contains(stall):
-                            continue
-                        if any(px[i, j] not in hard for i in (x, x + sw - 1)
-                               for j in (y, y + sh - 1)):
-                            continue
-                        if built is not None and any(buildings[int(i)].intersects(stall)
-                                                     for i in built.query(stall)):
-                            continue
-                        if rng.random() > min(1.0, 0.55 * settings.parking_density):
-                            continue
-                        taken.add((x // 8, y // 8))
-                        zones.append(Zone("ParkingStall", x, y, sw, sh))
+            bounds = tuple(int(v) for v in lot.bounds)
+            for x, y, sw, sh in car_park_stalls(bounds, w, h):
+                stall = box(x, y, x + sw, y + sh)
+                if not lot.contains(stall):
+                    continue
+                if any(px[i, j] not in hard for i in (x, x + sw - 1)
+                       for j in (y, y + sh - 1)):
+                    continue
+                if built is not None and any(buildings[int(i)].intersects(stall)
+                                             for i in built.query(stall)):
+                    continue
+                if rng.random() > min(1.0, 0.55 * settings.parking_density):
+                    continue
+                taken.add((x // 8, y // 8))
+                zones.append(Zone("ParkingStall", x, y, sw, sh))
 
     for y in range(4, h - STALL_H - 4, step):
         for x in range(4, w - STALL_W - 4, step):
@@ -860,6 +944,41 @@ def _entrances_by_unit(entrances: list[tuple[float, float, dict]], units
     return assigned
 
 
+def _rooms_by_unit(entries, fp, units, proj) -> list:
+    """The building's mapped rooms (renderer._buildings_geojson), moved with
+    the placed footprint and shared out between the units it was cut into.
+
+    Returns one list per unit of (ring, kind): the ring in that unit's own
+    tiles, kind from the OSM room tag where the game knows it (None = cut as
+    drawn but furnished by the usual rules). A room whose centre falls in no
+    unit - outside the footprint after squaring up - is left out.
+    """
+    out: list = [[] for _ in units]
+    if not entries:
+        return out
+    turned = fp.point_rotation or fp.point_offset != (0.0, 0.0)
+    for entry in entries:
+        ring = entry.get("ring") or []
+        if len(ring) < 3:
+            continue
+        pts = [proj.to_px(lat, lon) for lon, lat in ring]
+        if turned:
+            pts = [fp.transform_point(x, y) for x, y in pts]
+        room = str(entry.get("room") or "").strip().lower()
+        amenity = str(entry.get("amenity") or "").strip().lower()
+        kind = MAPPED_ROOM_KINDS.get(room) or MAPPED_ROOM_KINDS.get(amenity)
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        for n, unit in enumerate(units):
+            if unit.x0 <= cx < unit.x0 + unit.width \
+                    and unit.y0 <= cy < unit.y0 + unit.height:
+                local = [(int(round(x - unit.x0)), int(round(y - unit.y0)))
+                         for x, y in pts]
+                out[n].append((local, kind))
+                break
+    return out
+
+
 def _party_walls(owner: np.ndarray, me: int, x0: int, y0: int, mask: np.ndarray,
                  levels: list[int]) -> dict:
     """{(x, y, "N" or "W"): storeys of the neighbour} for each outside wall
@@ -890,12 +1009,12 @@ def _make_one(job: tuple) -> tuple:
     furniture, error): a building that cannot be laid out is left out with the
     reason, instead of stopping the other two thousand."""
     (w, h, levels, commercial, seed, kind, mask, settings, style, label, path, street, retail,
-        uses, hotel, entrances, profile, party) = job
+        uses, hotel, entrances, profile, mapped, party) = job
     try:
         plan = build_building(w, h, levels=levels, commercial=commercial, seed=seed,
                               kind=kind, mask=mask, settings=settings, street=street,
                               retail=retail, uses=uses, hotel=hotel, party=party,
-                              entrances=entrances, profile=profile)
+                              entrances=entrances, profile=profile, mapped=mapped)
         text = render_tbx(plan, label, style)
     except Exception:  # noqa: BLE001
         import traceback
@@ -911,37 +1030,117 @@ def _make_one(job: tuple) -> tuple:
 # Below this many buildings, starting worker processes costs more than it saves.
 PARALLEL_FROM = 60
 
+# What the last build made, kept beside its files so that building again - a new
+# zombie setting, a few footprints moved - lays out only the buildings whose
+# inputs changed. A building's .tbx depends on nothing but its own job (every
+# random choice is seeded from it, see tbx._stable_seed) and on the code that
+# lays it out, so the same job under the same code gives the same file.
+CACHE_FILE = "build_cache.json"   # in the map folder, not buildings/: that is all .tbx
 
-def _make_all(jobs: list[tuple]) -> list[tuple[int, int, int]]:
+
+def _code_fingerprint() -> str:
+    """Changes whenever the code that lays a building out does, or the tiles it
+    may use. A cache from other code is not trusted: the same job would come
+    out differently."""
+    import hashlib
+
+    from .layout import _erika_ready
+
+    h = hashlib.sha1()
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in sorted(os.listdir(here)):
+        if name.endswith(".py"):
+            h.update(name.encode())
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(f.read())
+    h.update(b"erika" if _erika_ready() else b"vanilla")
+    return h.hexdigest()
+
+
+def _job_key(job: tuple) -> str:
+    """A building's inputs as one string. The file name (index 10) is left out:
+    numbers shift when a footprint is added, and the building does not change."""
+    import hashlib
+    import pickle
+
+    return hashlib.sha1(pickle.dumps(job[:10] + job[11:], protocol=4)).hexdigest()
+
+
+def _read_cache(out_dir: str, code: str) -> dict:
+    try:
+        with open(os.path.join(out_dir, CACHE_FILE), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("code") != code:
+        return {}
+    return data.get("buildings") or {}
+
+
+def _write_cache(out_dir: str, code: str, entries: dict) -> None:
+    try:
+        tmp = os.path.join(out_dir, CACHE_FILE + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"code": code, "buildings": entries}, f)
+        os.replace(tmp, os.path.join(out_dir, CACHE_FILE))
+    except OSError:
+        pass          # no cache means the next build lays everything out again
+
+
+def _make_all(jobs: list[tuple], tick=None) -> list[tuple[int, int, int]]:
     """Every building, in order, across processes when there are enough.
 
     KNOXBUILD_WORKERS=1 forces one process. If worker processes cannot start
     at all - some locked-down PCs refuse them - the work simply runs here.
+    `tick(done, total)` is called as results come in, for a progress readout.
     """
+    def run_here() -> list:
+        out = []
+        for job in jobs:
+            out.append(_make_one(job))
+            if tick and len(out) % 25 == 0:
+                tick(len(out), len(jobs))
+        return out
+
     workers = int(os.environ.get("KNOXBUILD_WORKERS") or
                   max(1, min(12, (os.cpu_count() or 2) - 2)))
     if workers <= 1 or len(jobs) < PARALLEL_FROM:
-        return [_make_one(job) for job in jobs]
+        return run_here()
     from concurrent.futures import ProcessPoolExecutor
     from concurrent.futures.process import BrokenProcessPool
 
     try:
         with ProcessPoolExecutor(max_workers=workers) as pool:
-            return list(pool.map(_make_one, jobs,
-                                 chunksize=max(4, len(jobs) // (workers * 8))))
+            out = []
+            for result in pool.map(_make_one, jobs,
+                                   chunksize=max(4, len(jobs) // (workers * 8))):
+                out.append(result)
+                if tick and len(out) % 25 == 0:
+                    tick(len(out), len(jobs))
+            return out
     except (BrokenProcessPool, OSError) as exc:
         print(f"  (worker processes unavailable: {exc}; building in one process)")
-        return [_make_one(job) for job in jobs]
+        return run_here()
 
 
 def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
           max_size: int | None = None, settings: Settings | None = None,
-          should_stop=None) -> int:
+          should_stop=None, progress=None) -> int:
     """Generate every building for a rendered map.
 
     The explicit seed/min_size/max_size arguments are kept so the command line
     can override one value without composing a whole Settings.
+
+    `progress(text, fraction)`, when given, is called as the work moves on:
+    a short account of the stage, and how far through the whole run it is
+    (0 to 1, or None when that is not known). The fractions are rough: where
+    each stage starts, not a measured share of the time.
     """
+    def say(text: str, fraction: float | None = None) -> None:
+        if progress:
+            progress(text, fraction)
+
+    say("Reading the map", 0.0)
     settings = settings or Settings()
     overrides = {k: v for k, v in (("seed", seed), ("min_size", min_size),
                                    ("max_size", max_size)) if v is not None}
@@ -994,12 +1193,21 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
 
     bdir = os.path.join(out_dir, "buildings")
     os.makedirs(bdir, exist_ok=True)
-    # Clear out the previous build. Building numbers follow the footprints, so
-    # a rebuild does not overwrite the same set of files, and leftovers from an
-    # earlier run sit in the folder looking like part of the map.
-    for stale in os.listdir(bdir):
-        if stale.endswith(".tbx"):
-            os.remove(os.path.join(bdir, stale))
+    # What the last build left. Building numbers follow the footprints, so a
+    # rebuild does not overwrite the same set of files, and leftovers from an
+    # earlier run would sit in the folder looking like part of the map: the
+    # ones this build does not write are removed once it has finished (below),
+    # and the ones it can reuse are left alone until then.
+    earlier_files = {f for f in os.listdir(bdir) if f.endswith(".tbx")}
+    code = _code_fingerprint()
+    earlier = _read_cache(out_dir, code)
+    # Gone until this build has finished and written it again. A build that
+    # stops half way leaves some files rewritten and some not, and a cache
+    # that still described the old ones would vouch for the wrong files.
+    try:
+        os.remove(os.path.join(out_dir, CACHE_FILE))
+    except OSError:
+        pass
     # WorldEd writes into these but will not create them: BMP to TMX fails with
     # "Could not open file for writing" if the export directory is absent.
     os.makedirs(os.path.join(out_dir, "tmx"), exist_ok=True)
@@ -1019,6 +1227,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     squared = 0    # buildings close enough to the grid to square up
     rows_split = 0   # rows of shops or terraces cut into their units
     units_made = 0   # and how many buildings those became
+    split_large = 0  # and buildings past max_size kept by cutting them
 
     areas = AreaIndex.load(out_dir, map_name, proj)
     points = _points_of_use(out_dir, info, map_name, proj)
@@ -1116,16 +1325,52 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     context = Context(proj.width, proj.height, surroundings, metres_per_tile,
                       road_hierarchy=road_hierarchy)
 
-    for placed_so_far, (_neg_area, i, px) in enumerate(order):
+    # The buildings past max_size are not placed with the rest: they are kept
+    # (below) but only after everything else has its ground. The order here is
+    # largest first, and an outline that claims its whole area before the
+    # buildings inside it are placed leaves them "taken" - a campus mapped as one
+    # building would lose every house and hall standing in it, where before it
+    # was simply left out and they all stayed. Placed last, it takes what is free.
+    deferred_large: list = []
+
+    def candidates():
+        for neg_area, idx, points in order:
+            yield neg_area, idx, points, False
+        for neg_area, idx, points in deferred_large:
+            yield neg_area, idx, points, True
+
+    for placed_so_far, (_neg_area, i, px, retry) in enumerate(candidates()):
         # Between buildings: nothing is written to disk until the whole run
         # is laid out, so stopping here costs only the time spent.
         if placed_so_far % 64 == 0:
             knoxstop.check(should_stop, "the buildings")
         feat = geo["features"][i]
-        fp, reason = place(px, occupied, min_side=min_size, max_side=max_size,
-                   snap_degrees=settings.square_buildings,
-                   avoid=road_weight, lots=lots,
-                   alignment=settings.building_alignment)
+        oversize = False
+        if retry:
+            # A building past max_size is not thrown away any more: the
+            # factory and the hangar are the landmarks a place is known by,
+            # and dropping them left a hole exactly where the eye looks. The
+            # gate measured the real building's long side, so it is tried
+            # again without that one gate (place claimed nothing before
+            # refusing) and cut into units that fit further down, in
+            # row_units - which is what it is anyway, works of that size
+            # being several blocks wall to wall.
+            fp, reason = place(px, occupied, min_side=min_size, max_side=1e9,
+                       snap_degrees=settings.square_buildings,
+                       avoid=road_weight, lots=lots,
+                       alignment=settings.building_alignment)
+            oversize = fp is not None
+        else:
+            fp, reason = place(px, occupied, min_side=min_size, max_side=max_size,
+                       snap_degrees=settings.square_buildings,
+                       avoid=road_weight, lots=lots,
+                       alignment=settings.building_alignment)
+            if fp is None and reason == "large":
+                if -_neg_area <= MAX_OVERSIZE_TILES:
+                    deferred_large.append((_neg_area, i, px))
+                else:
+                    skipped["large"] += 1
+                continue
         if fp is None:
             skipped[reason] += 1
             continue
@@ -1134,6 +1379,9 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
             squared += 1
 
         tags = feat.get("properties", {})
+        # Rooms the mapper drew inside it, if OSM has any for this building
+        # (renderer._buildings_geojson attaches them to their building).
+        mapped = feat.get("properties", {}).get("rooms") or []
         btag = (tags.get("building") or "").strip().lower()
         cx = x0 + w / 2
         cy = y0 + h / 2
@@ -1221,7 +1469,11 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # A row of shops or a terrace of houses is one polygon here; built as
         # one building it is the "uber building" players reported. Each unit
         # becomes its own building, standing wall to wall with the next.
-        units = row_units(fp, special, btag, len(uses), metres_per_tile)
+        units = row_units(fp, special, btag, len(uses), metres_per_tile,
+                          max_side=max_size if oversize else None)
+        if oversize:
+            split_large += 1
+        unit_mapped = _rooms_by_unit(mapped, fp, units, proj)
         placed_entrances = [(x, y, tags) for x, y, tags in entrance_points]
         if fp.point_rotation or fp.point_offset != (0.0, 0.0):
             placed_entrances = [(*fp.transform_point(x, y), tags)
@@ -1250,7 +1502,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                          # Shops under flats where the town is built up.
                          context.density(cx, cy) >= RETAIL_DENSITY,
                          # What the ground floor really is, and a hotel's rooms.
-                         unit_uses, hotel, entrances_by_unit[n], profile))
+                         unit_uses, hotel, entrances_by_unit[n], profile,
+                         unit_mapped[n]))
             outline = px if len(units) == 1 else [
                 (ux0, uy0), (ux0 + uw, uy0), (ux0 + uw, uy0 + uh), (ux0, uy0 + uh)]
             decided.append((fname, label, ux0, uy0, uw, uh, unit, outline, special,
@@ -1276,9 +1529,33 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     # across processes: a 4,000-building district took three minutes on one.
     failed_buildings = []
     escalator_squares: list = []
+    keys = [_job_key(job) for job in jobs]
+    results: list = [None] * len(jobs)
+    todo = []
+    for j, d in enumerate(decided):
+        old = earlier.get(d[0])
+        if (old and old.get("key") == keys[j] and d[0] in earlier_files
+                and os.path.exists(os.path.join(bdir, d[0]))):
+            storeys, rooms, furniture, escalators = old["result"]
+            results[j] = (storeys, rooms, furniture, None,
+                          [tuple(e) for e in escalators])
+        else:
+            todo.append(j)
+    reused = len(jobs) - len(todo)
+    if reused:
+        print(f"reused {reused} of {len(jobs)} buildings from the last build")
+    say(f"Laying out {len(todo):,} buildings"
+        + (f" ({reused:,} reused from the last build)" if reused else ""), 0.05)
+
+    def laid_out(done: int, total: int) -> None:
+        say(f"Laying out buildings: {done:,} of {total:,}", 0.05 + 0.55 * done / total)
+
+    for j, result in zip(todo, _make_all([jobs[j] for j in todo], laid_out)):
+        results[j] = result
+
     for (fname, label, x0, y0, w, h, fp, px, special, measured, commercial,
          style, mask, real_name), (storeys, rooms, furniture, error,
-                                   escalators) in zip(decided, _make_all(jobs)):
+                                   escalators) in zip(decided, results):
         if error:
             failed_buildings.append(error)
             continue
@@ -1311,6 +1588,17 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     rows.sort(key=lambda r: r["file"])
     knoxstop.check(should_stop, "the buildings")
 
+    # Remember what was made, and clear out what was left from before and not
+    # written this time.
+    entries = {d[0]: {"key": keys[j], "result": [r_[0], r_[1], r_[2], r_[4]]}
+               for j, (d, r_) in enumerate(zip(decided, results)) if not r_[3]}
+    _write_cache(out_dir, code, entries)
+    for stale in earlier_files - set(entries):
+        try:
+            os.remove(os.path.join(bdir, stale))
+        except OSError:
+            pass
+
     # One military rifle somewhere on the map, whatever this town turned out
     # to be: an army building, else the police station, else a gun shop, else
     # a house on the edge of town (knoxbuild/guns.py). A real place has no
@@ -1322,6 +1610,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         out_dir, map_name,
         guns.choose(rows, gunshops) if settings.guaranteed_rifle else None,
         origin(), CELL_SIZE)
+    say("Front paths, yards and porch lights", 0.62)
     from .yards import paint_paths
     drives: list = []
     porch_lights: list = []
@@ -1334,6 +1623,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     escalator_placements = pack_loose(bdir, map_name, "escalators",
                                       escalator_squares, on_top=True)
 
+    say("Petrol pumps, graves and other props", 0.74)
     # Pumps on a forecourt at each petrol station, including those mapped as
     # a point with no building of their own.
     from .pumps import place_pumps
@@ -1354,6 +1644,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     # it or what another one reads: fences, the zombie spawn map, the paper
     # map, the parking/town zones and the bridges. Mostly numpy and shapely,
     # which let go of the interpreter lock, so threads overlap them.
+    say("Fences, zombies, zones and the paper map", 0.82)
     from concurrent.futures import ThreadPoolExecutor
     from .structures import build_structures
 
@@ -1396,6 +1687,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                   pump_placements + prop_placements + light_placements
                   + escalator_placements)
 
+    say("Writing the WorldEd project", 0.95)
     pzw_path = os.path.join(out_dir, f"{map_name}.pzw")
     with open(pzw_path, "w", encoding="utf-8") as f:
         f.write(render_pzw(info["cells_x"], info["cells_y"],
@@ -1414,7 +1706,11 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     print(f"footprints in geojson : {len(geo['features'])}")
     print(f"  shops, food, offices: {with_uses} buildings from the map's points and tags")
     print(f"  too small (<{min_size})     : {skipped['small']}")
-    print(f"  too large (>{max_size})   : {skipped['large']}")
+    if split_large:
+        print(f"  oversized (>{max_size})     : {split_large} kept, "
+              f"cut into units that fit")
+    else:
+        print(f"  too large (>{max_size})   : {skipped['large']}")
     print(f"  outside the map     : {skipped['outside']}")
     print(f"  swallowed by others : {skipped['taken']}")
     print(f"  not buildings       : {skipped['not a building']} (roofs, ruins, tanks)")

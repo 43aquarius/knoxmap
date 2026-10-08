@@ -65,6 +65,19 @@ ROAD = {C.MEDIUM_ASPHALT, C.DARKEST_ASPHALT, C.DARK_POTHOLE, C.LIGHT_POTHOLE}
 BLOCKED = ROAD | {C.WATER}
 
 
+def lattice_on_map(first: int, stop: int, step: int, limit: int) -> range:
+    """The values first, first + step, ... below `stop` that are on the map, 0..limit.
+
+    A polygon's whole bounding box used to be walked and what fell off the map
+    thrown away afterwards. A military range mapped as one polygon is a hundred
+    kilometres across, and a few thousand headstone-sized steps become billions
+    of Shapely calls. The values are the same ones on the same lattice; the ones
+    below 0 or at `limit` and past are simply never visited."""
+    if first < 0:
+        first += -(-(-first) // step) * step         # the first value that is 0 or more
+    return range(first, min(stop, limit), step)
+
+
 def _blocked_mask(ground: np.ndarray) -> np.ndarray:
     out = np.zeros(ground.shape[:2], dtype=bool)
     for colour in BLOCKED:
@@ -127,12 +140,11 @@ def place_props(out_dir: str, map_name: str, bdir: str, occupied: np.ndarray,
         if counts["graves"] >= MAX_GRAVES:
             break
         minx, miny, maxx, maxy = (int(v) for v in poly.bounds)
-        row = 0
-        for y in range(miny + down, maxy, down):
-            row += 1
+        for y in lattice_on_map(miny + down, maxy, down, height):
+            row = (y - (miny + down)) // down + 1     # counted from the polygon's own edge
             if row % PATH_EVERY_ROWS == 0:
                 continue                       # a way through the plots
-            for x in range(minx + across, maxx, across):
+            for x in lattice_on_map(minx + across, maxx, across, width):
                 if counts["graves"] >= MAX_GRAVES:
                     break
                 if not poly.contains(Point(x + 0.5, y + 0.5)):
@@ -154,8 +166,8 @@ def place_props(out_dir: str, map_name: str, bdir: str, occupied: np.ndarray,
         if poly.area * metres_per_tile * metres_per_tile < DUMP_MIN_M2:
             continue
         minx, miny, maxx, maxy = (int(v) for v in poly.bounds)
-        for y in range(miny + gap, maxy, gap):
-            for x in range(minx + gap, maxx, gap):
+        for y in lattice_on_map(miny + gap, maxy, gap, height):
+            for x in lattice_on_map(minx + gap, maxx, gap, width):
                 if counts["dumps"] >= MAX_DUMPS:
                     break
                 if not poly.contains(Point(x + 0.5, y + 0.5)):

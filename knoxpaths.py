@@ -15,6 +15,7 @@ import os
 import re
 import signal
 import sys
+import threading
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -22,19 +23,51 @@ CONFIG_PATH = BASE_DIR / "knoxmap_config.json"
 VENDOR_DIR = BASE_DIR / "vendor"
 
 
+# Several things read the settings file, change one key and write it back: Setup,
+# the language, the Steam folders, the version the player chose. Two at once
+# would each write back what they read, and the first one's change was lost.
+_CONFIG_LOCK = threading.RLock()
+
+
 def load_config() -> dict:
+    """The settings, or {} when there are none or the file is not usable.
+
+    Anything that is not a JSON object - a list, null, a string left by a
+    half-written file - is no settings at all; callers all ask it for keys."""
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (OSError, ValueError):
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_config(config: dict) -> None:
+    """Write the file whole through a temporary one. Written in place, a crash
+    part way cut the settings short, load_config() took that for "no settings",
+    and the next save wrote back only the one key it had: the game's folder and
+    everything else Setup had found were gone."""
+    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    os.replace(tmp, CONFIG_PATH)
+
+
+def update_config(changes: dict) -> dict:
+    """Set these keys, keeping every other, and return the settings as written.
+    Unlike save_config() a False or empty value is stored as it is."""
+    with _CONFIG_LOCK:
+        config = load_config()
+        config.update(changes)
+        _write_config(config)
+        return config
 
 
 def save_config(values: dict) -> None:
-    config = load_config()
-    config.update({k: str(v) for k, v in values.items() if v})
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+    with _CONFIG_LOCK:
+        config = load_config()
+        config.update({k: str(v) for k, v in values.items() if v})
+        _write_config(config)
 
 
 def _first(*candidates) -> Path | None:
@@ -509,10 +542,8 @@ def chosen_steam_folders() -> list[str]:
 
 
 def save_steam_folders(folders: list[str]) -> None:
-    config = load_config()
-    config["steam_folders"] = [str(f).strip().strip('"') for f in folders if str(f).strip()]
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+    update_config({"steam_folders": [str(f).strip().strip('"') for f in folders
+                                     if str(f).strip()]})
     _LIBRARY_CACHE["libraries"] = None
 
 

@@ -141,6 +141,22 @@ GRID_ROADS = {"road_minor", "road_medium", "road_service", "pedestrian"}
 # to it: 1 is a perfect grid, 0 no preference. Measured on test maps, gridded
 # towns sit well above this and old organic centres below it.
 ALIGN_MIN_STRENGTH = 0.25
+# Per-district street grid (dominant_road_angle). The map is one tile grid and
+# is turned by one angle, but the angle is chosen *per neighbourhood* now: the
+# bbox is cut into cells of this many metres, each cell measures its own local
+# grid, and the cells vote. Averaging a town that grew in two or three phases
+# used to land the rotation halfway between them - a compromise angle that
+# straightens none of the districts - and a long avenue at its own angle used
+# to sway the whole town because it carried more length than it deserved.
+# 400 m is a few blocks: small enough that two grids a street apart are told
+# apart, big enough that a local grid can be measured inside one cell.
+DISTRICT_CELL_M = 400.0
+# A cell with less road than this in it has nothing to vote with - a park
+# edge, a stub - and abstains rather than letting one corner decide the turn.
+DISTRICT_MIN_ROAD_M = 60.0
+# Two local grids whose angles are this close (degrees, ignoring the
+# 90-degree period of a grid) are the same district and vote together.
+DISTRICT_CLUSTER_DEG = 12.0
 
 
 # Roads that carry on past the edge of a drawn shape. Cutting every road at the
@@ -264,6 +280,13 @@ def cover_bbox(south: float, west: float, north: float, east: float,
     return min(lats), min(lons), max(lats), max(lons)
 
 
+def _grid_delta(a: float, b: float) -> float:
+    """How far two grid angles are apart in degrees, ignoring the 90-degree
+    period: 44 degrees and -44 degrees are the same grid, two degrees off."""
+    d = abs(a - b) % 90.0
+    return min(d, 90.0 - d)
+
+
 def dominant_road_angle(features: Iterable[OSMFeature], south: float, west: float,
                         north: float, east: float) -> tuple[float, float]:
     """The main direction of a town's streets, and how strongly they share it.
@@ -275,12 +298,29 @@ def dominant_road_angle(features: Iterable[OSMFeature], south: float, west: floa
     fences and the paper map are projected the same way, so nothing is
     misaligned - only north is no longer straight up.
 
+    The angle is measured per district, not once over the whole town. Each
+    DISTRICT_CELL_M cell of the bbox measures its own local grid (directions
+    averaged with a 90-degree period, segments weighed by length, as before),
+    and cells whose local grid is within DISTRICT_CLUSTER_DEG of one another
+    vote together as one district. The district holding the most street wins,
+    and the rotation is its angle.
+
+    This matters where a town grew in phases: an old core on one grid and an
+    extension on another used to average into an angle that belonged to
+    neither, so both districts stayed staircases. Now the district with the
+    most street runs straight. The rotation is still one angle for the whole
+    map - the game's tile grid is global - so streets on the losing grid keep
+    their offset; "Knox County roads" is the setting that bends those.
+
     Returns (angle, strength): the angle in degrees in (-45, 45], counter-
-    clockwise from east, and the strength in [0, 1]. Directions are averaged
-    with a 90-degree period, so a north-south street and an east-west one
-    agree; each segment weighs by its length.
+    clockwise from east, and the strength in [0, 1] - how much of the town's
+    grid road the winning district's straightened direction accounts for. A
+    town with no district big enough to vote falls back to the plain
+    town-wide mean, which is what it always did.
     """
     proj = Projector.build(south, west, north, east, 1.0)
+    # (sin sum, cos sum, length) per district cell, plus the town-wide totals.
+    cells: dict[tuple[int, int], list[float]] = {}
     sin_sum = cos_sum = total = 0.0
     for feat in features:
         if feat.kind != "way" or classify(feat.tags, _is_polygon(feat)) not in GRID_ROADS:
@@ -291,14 +331,75 @@ def dominant_road_angle(features: Iterable[OSMFeature], south: float, west: floa
             length = math.hypot(dx, dy)
             if length < 1:
                 continue
+            # Only the street that is on the map has a say. The features include
+            # what was fetched beyond it (a turned map downloads a margin all the
+            # way round, and a long way is whole however far it runs), and a
+            # bigger grid in that margin used to decide how the map was turned.
+            mid_x, mid_y = (ax + bx) / 2, (ay + by) / 2
+            if not (0 <= mid_x < proj.width and 0 <= mid_y < proj.height):
+                continue
             a = 4 * math.atan2(dy, dx)
-            sin_sum += length * math.sin(a)
-            cos_sum += length * math.cos(a)
+            s, c = length * math.sin(a), length * math.cos(a)
+            sin_sum += s
+            cos_sum += c
             total += length
+            key = (math.floor(mid_x / DISTRICT_CELL_M),
+                   math.floor(mid_y / DISTRICT_CELL_M))
+            slot = cells.get(key)
+            if slot is None:
+                cells[key] = [s, c, length]
+            else:
+                slot[0] += s
+                slot[1] += c
+                slot[2] += length
     if total == 0:
         return 0.0, 0.0
-    angle = math.degrees(math.atan2(sin_sum, cos_sum) / 4)
-    return angle, math.hypot(sin_sum, cos_sum) / total
+
+    # Every cell with enough road in it is one district's vote: its local
+    # angle, weighted by how much street stands behind it and how well those
+    # streets agree (a cell of crossed lanes has little to say).
+    votes: list[tuple[float, float, float, float]] = []   # angle, weight, sin, cos
+    for s, c, length in cells.values():
+        if length < DISTRICT_MIN_ROAD_M:
+            continue
+        agree = math.hypot(s, c) / length
+        weight = length * agree
+        if weight <= 0:
+            continue
+        votes.append((math.degrees(math.atan2(s, c) / 4), weight, s, c))
+    if not votes:
+        # Only stubs and scattered lanes: no district to ask, so the town as a
+        # whole answers, exactly as it did before districts were measured.
+        return (math.degrees(math.atan2(sin_sum, cos_sum) / 4),
+                math.hypot(sin_sum, cos_sum) / total)
+
+    # Cluster the votes greedily from the strongest district outwards. Each
+    # cell joins the strongest unassigned seed it is within DISTRICT_CLUSTER_DEG
+    # of, so one grid can gather its own phase and the next seed starts a new
+    # one; the cluster with the most street wins.
+    votes.sort(key=lambda v: (-v[1], v[0]))
+    assigned = [False] * len(votes)
+    best: tuple[float, float, float] | None = None     # magnitude, sin, cos
+    for i, (seed_angle, _weight, _s, _c) in enumerate(votes):
+        if assigned[i]:
+            continue
+        assigned[i] = True
+        members = [i]
+        for j in range(i + 1, len(votes)):
+            if not assigned[j] and _grid_delta(seed_angle, votes[j][0]) <= DISTRICT_CLUSTER_DEG:
+                assigned[j] = True
+                members.append(j)
+        m_sin = sum(votes[m][2] for m in members)
+        m_cos = sum(votes[m][3] for m in members)
+        magnitude = math.hypot(m_sin, m_cos)
+        if best is None or magnitude > best[0]:
+            best = (magnitude, m_sin, m_cos)
+    _magnitude, m_sin, m_cos = best
+    angle = math.degrees(math.atan2(m_sin, m_cos) / 4)
+    # How much of the town's grid road the winning district accounts for: a
+    # second phase on the far side of the map lowers it, as disagreement did
+    # before, but no longer drags the angle off the grid it belongs to.
+    return angle, _magnitude / total
 
 
 def _ceil_to(value: float, step: int) -> int:
@@ -476,8 +577,12 @@ def _way_width_m(feat: OSMFeature, cat: str) -> float:
     if raw:
         # OSM widths are metres unless suffixed; "7", "7 m" and "7.5" all occur.
         try:
-            return max(2.0, min(30.0, float(str(raw).split()[0].replace(",", "."))))
-        except ValueError:
+            given = float(str(raw).split()[0].replace(",", "."))
+            # "nan" is a number to float(), and min(30.0, nan) is 30.0: a road
+            # tagged width=nan came out thirty metres wide.
+            if math.isfinite(given):
+                return max(2.0, min(30.0, given))
+        except (ValueError, IndexError):      # IndexError: a width of " "
             pass
     lanes = feat.tags.get("lanes")
     if lanes:
@@ -630,6 +735,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     buckets: dict[str, list[OSMFeature]] = {}
     vegetation_feats: list[OSMFeature] = []
     building_feats: list[OSMFeature] = []
+    indoor_feats: list[OSMFeature] = []
     fence_feats: list[OSMFeature] = []
     place_feats: list[OSMFeature] = []
     monument_feats: list[OSMFeature] = []
@@ -644,6 +750,12 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
             monument_feats.append(feat)
         if feat.kind == "node" and "natural" not in feat.tags:
             continue      # shops and cafes inside buildings: knoxbuild/uses.py
+        # Rooms a mapper drew inside a building. classify() has no colour for
+        # them - they are walls, not ground - so they are taken aside here and
+        # attached to their building when the geojson is written.
+        if feat.kind == "way" and feat.tags.get("indoor") in ("room", "corridor"):
+            indoor_feats.append(feat)
+            continue
         barrier = feat.tags.get("barrier")
         if barrier in FENCE_BARRIERS and feat.kind == "way":
             fence_feats.append(feat)
@@ -799,7 +911,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     preview.save(preview_path, format="PNG")
 
     with open(buildings_path, "w", encoding="utf-8") as f:
-        json.dump(_buildings_geojson(building_feats), f)
+        json.dump(_buildings_geojson(building_feats, indoor_feats), f)
     with open(os.path.join(output_dir, f"{map_name}_areas.geojson"), "w", encoding="utf-8") as f:
         json.dump(_areas_geojson(buckets), f)
     with open(os.path.join(output_dir, f"{map_name}_fences.geojson"), "w", encoding="utf-8") as f:
@@ -1847,7 +1959,7 @@ def _places(feats: list[OSMFeature], proj: Projector) -> list[dict]:
         raw = str(f.tags.get("population", "")).replace(",", "").replace(" ", "")
         try:
             population = int(float(raw.split(";")[0]))
-        except ValueError:
+        except (ValueError, OverflowError):      # OverflowError: "inf", "1e999"
             continue
         la, lo = f.geometry[0]
         x, y = proj.to_px(la, lo)
@@ -2126,9 +2238,19 @@ BUILDING_TAGS = {
 }
 
 
-def _buildings_geojson(feats: list[OSMFeature]) -> dict:
-    """Export building footprints so the user knows where to drop .tbx lots."""
+def _buildings_geojson(feats: list[OSMFeature],
+                       indoor: list[OSMFeature] = ()) -> dict:
+    """Export building footprints so the user knows where to drop .tbx lots.
+
+    Ways tagged indoor=room are attached to the building they stand in, as
+    a "rooms" property: the mapper's own interior walls, which knoxbuild
+    cuts the ground floor along instead of guessing at it
+    (knoxbuild/build.py, knoxbuild/layout._mapped_rooms).
+    """
+    from shapely.geometry import MultiPolygon, Polygon
+
     features = []
+    polys = []        # each building's shape, only built when rooms must fit
     for f in feats:
         if f.kind == "way":
             coords = [[lon, lat] for lat, lon in f.geometry]
@@ -2142,19 +2264,51 @@ def _buildings_geojson(feats: list[OSMFeature]) -> dict:
                                    if k in BUILDING_TAGS},
                     "geometry": {"type": "Polygon", "coordinates": [coords]},
                 })
+                if indoor:
+                    g = Polygon(coords)
+                    polys.append(g if g.is_valid else g.buffer(0))
         elif f.kind == "relation":
-            polys = []
+            rings = []
             for role, ring in f.role_geoms:
                 if role == "inner":
                     continue
                 coords = [[lon, lat] for lat, lon in ring]
                 if len(coords) >= 3:
-                    polys.append([coords])
-            if polys:
+                    rings.append(coords)
+            if rings:
                 features.append({
                     "type": "Feature",
                     "properties": {k: v for k, v in f.tags.items()
                                    if k in BUILDING_TAGS},
-                    "geometry": {"type": "MultiPolygon", "coordinates": polys},
+                    "geometry": {"type": "MultiPolygon", "coordinates":
+                                 [[r] for r in rings]},
                 })
+                if indoor:
+                    g = MultiPolygon([Polygon(r) for r in rings])
+                    polys.append(g if g.is_valid else g.buffer(0))
+    if indoor and features:
+        import numpy as np
+        # One representative point per room, against the bounding boxes of all
+        # buildings first: a city can hold thousands of each, and only the
+        # handful of buildings whose box holds the point are asked properly.
+        boxes = np.array([g.bounds for g in polys])
+        for f in indoor:
+            if len(f.geometry) < 3:
+                continue
+            ring = [[lon, lat] for lat, lon in f.geometry]
+            room = Polygon(ring)
+            if not room.is_valid:
+                room = room.buffer(0)
+            if room.is_empty:
+                continue
+            p = room.representative_point()
+            near = np.flatnonzero((boxes[:, 0] <= p.x) & (p.x <= boxes[:, 2])
+                                  & (boxes[:, 1] <= p.y) & (p.y <= boxes[:, 3]))
+            for i in near.tolist():
+                if polys[i].contains(p):
+                    features[i]["properties"].setdefault("rooms", []).append(
+                        {"ring": ring,
+                         "room": f.tags.get("room"),
+                         "amenity": f.tags.get("amenity")})
+                    break
     return {"type": "FeatureCollection", "features": features}

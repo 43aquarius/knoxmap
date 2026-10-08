@@ -344,6 +344,11 @@ def _stage(release: dict, chosen: bool) -> None:
     if digest.startswith("sha256:") and digest.split(":", 1)[1] != h.hexdigest():
         partial.unlink(missing_ok=True)
         raise RuntimeError("the download does not match GitHub's fingerprint")
+    if not digest.startswith("sha256:"):
+        # Older releases have none, so it cannot be required; but it should be
+        # in the log that this one was only checked for being a KnoxMap zip.
+        _log().warning("update: GitHub published no fingerprint for %s; it is checked "
+                       "only for being a KnoxMap release", asset.get("name"))
     with _open_release(partial) as bundle:
         if "KnoxMap/knoxmap.py" not in bundle.names():
             raise RuntimeError("the download is not a KnoxMap release")
@@ -417,10 +422,7 @@ def choose(version: str) -> dict:
         # newest. Choosing the newest lets them run again. Only once it has
         # downloaded, so a failed download changes nothing.
         import knoxpaths
-        config = knoxpaths.load_config()
-        config["auto_update"] = found[0] is available[0]
-        with open(knoxpaths.CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+        knoxpaths.update_config({"auto_update": found[0] is available[0]})
     except Exception as exc:  # noqa: BLE001
         _log().warning("choosing KnoxMap %s failed: %s", version, exc)
         _set(state="error", error=str(exc))
@@ -498,6 +500,30 @@ def _put_in_place(src: Path, dest: Path, rel: str, budget: list[float]) -> None:
     os.replace(src, dest)
 
 
+def _roll_back(done: list[tuple[str, Path | None]]) -> None:
+    """Put back what an update that failed part way had already replaced, newest
+    first. Best effort: a file that cannot be put back is logged and the rest
+    still are."""
+    log = _log()
+    for rel, saved in reversed(done):
+        dest = BASE_DIR / rel
+        try:
+            if saved is not None and saved.exists():
+                os.replace(saved, dest)
+                continue
+            aside = ASIDE_DIR / rel
+            if aside.exists():                    # what _put_in_place moved out of the way
+                if dest.is_dir():
+                    shutil.rmtree(dest, ignore_errors=True)
+                else:
+                    dest.unlink(missing_ok=True)
+                os.replace(aside, dest)
+            elif dest.is_file():
+                dest.unlink(missing_ok=True)      # a file that was not there before
+        except OSError as exc:
+            log.warning("update: could not put %s back: %s", rel, exc)
+
+
 def _clear_aside() -> None:
     """Delete the files a previous update had to move out of the way."""
     if not ASIDE_DIR.exists():
@@ -545,22 +571,41 @@ def apply_staged() -> bool:
             z.extract(tmp, [f"KnoxMap/{rel}" for rel in new_files])
             new_files.sort(key=lambda rel: rel == VERSION_FILE)
             budget = [WAIT_BUDGET_S]
-            for rel in new_files:
-                src = Path(tmp) / "KnoxMap" / rel
-                dest = BASE_DIR / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                mode = src.stat().st_mode
-                _put_in_place(src, dest, rel, budget)
-                # Keep the executable bit the tarball carried, and put one on
-                # the launchers whatever it said: a zip has no such bit, so
-                # after a Windows-built release ./knoxmap.sh would not run.
-                if os.name != "nt":
-                    if rel.endswith(".sh"):
-                        mode |= 0o111
-                    try:
-                        os.chmod(dest, mode & 0o7777)
-                    except OSError:
-                        pass
+            # Every file is copied aside before it is replaced, so a failure part
+            # way through can put the ones already done back. Unpacking is all or
+            # nothing, but this loop is not: without it a failure on the fortieth
+            # file left forty new files among the old until the next start.
+            backups = Path(tmp) / "rollback"
+            done: list[tuple[str, Path | None]] = []
+            try:
+                for rel in new_files:
+                    src = Path(tmp) / "KnoxMap" / rel
+                    dest = BASE_DIR / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    mode = src.stat().st_mode
+                    saved = None
+                    if dest.is_file():
+                        saved = backups / rel
+                        try:
+                            saved.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(dest, saved)
+                        except OSError:
+                            saved = None          # cannot be copied: cannot be put back
+                    done.append((rel, saved))
+                    _put_in_place(src, dest, rel, budget)
+                    # Keep the executable bit the tarball carried, and put one on
+                    # the launchers whatever it said: a zip has no such bit, so
+                    # after a Windows-built release ./knoxmap.sh would not run.
+                    if os.name != "nt":
+                        if rel.endswith(".sh"):
+                            mode |= 0o111
+                        try:
+                            os.chmod(dest, mode & 0o7777)
+                        except OSError:
+                            pass
+            except BaseException:
+                _roll_back(done)
+                raise
         # Files the old version had and the new one does not.
         try:
             old_files = json.loads(MANIFEST.read_text(encoding="utf-8")).get("files", [])

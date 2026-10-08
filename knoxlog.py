@@ -262,6 +262,7 @@ _EXIT_CODES = {
     -1073741801: "ran out of memory (0xC0000017)",
     3221225495: "ran out of memory (0xC0000017)",
     65: "stalled or timed out",
+    124: "hung and was stopped",
 }
 
 

@@ -617,6 +617,91 @@ document.getElementById('resetSettings').addEventListener('click', () => {
   showReapply();
 });
 
+// ---- saved areas -----------------------------------------------------------------
+
+let savedAreas = [];
+
+async function loadPresets() {
+  try {
+    savedAreas = (await (await fetch('/api/presets')).json()).presets || [];
+  } catch (_) { savedAreas = []; }
+  const list = document.getElementById('presetList');
+  list.innerHTML = savedAreas.length
+    ? savedAreas.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('')
+    : '<option value="">(none saved yet)</option>';
+  document.getElementById('presetsCount').textContent =
+    savedAreas.length ? `(${savedAreas.length})` : '';
+  for (const id of ['presetLoad', 'presetDelete']) {
+    document.getElementById(id).disabled = !savedAreas.length;
+  }
+}
+
+function presetNote(text, kind) {
+  const el = document.getElementById('presetNote');
+  el.textContent = text;
+  el.className = kind === 'bad' ? 'hint bad' : 'hint';
+}
+
+document.getElementById('presetSave').addEventListener('click', async () => {
+  const name = document.getElementById('presetName').value.trim()
+    || document.getElementById('presetList').value;
+  if (!currentRect) { presetNote('Draw an area first.', 'bad'); return; }
+  if (!name) { presetNote('Give the area a name.', 'bad'); return; }
+  const b = rectBounds(currentRect);
+  try {
+    const res = await fetch('/api/presets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name, south: b.s, west: wrapLon(b.w), north: b.n, east: wrapLon(b.e),
+        shape: selectionShape(), metersPerTile: readScale(),
+        settings: readSettings(),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw apiError(data, res);
+    presetNote(`Saved "${name}".`);
+    document.getElementById('presetName').value = '';
+    await loadPresets();
+    document.getElementById('presetList').value = name;
+  } catch (err) { presetNote(err.message, 'bad'); }
+});
+
+document.getElementById('presetLoad').addEventListener('click', () => {
+  const p = savedAreas.find(a => a.name === document.getElementById('presetList').value);
+  if (!p) return;
+  let layer;
+  if (p.shape) {
+    const polys = p.shape.type === 'Polygon' ? [p.shape.coordinates] : p.shape.coordinates;
+    layer = L.polygon(polys.map(rings => rings.map(ring =>
+      ring.map(([lon, lat]) => [lat, lon]))), SEL_STYLE);
+  } else {
+    layer = L.rectangle([[p.south, p.west], [p.north, p.east]], SEL_STYLE);
+  }
+  setSelection(layer);
+  map.fitBounds(layer.getBounds());
+  document.getElementById('metersPerTile').value = p.metersPerTile;
+  if (settingsMeta) {
+    if (p.preset) document.getElementById('preset').value = p.preset;
+    buildSettingsForm({ ...settingsMeta.defaults, ...p.settings });
+  }
+  fixScaleField();
+  presetNote(`Loaded "${p.name}".`);
+});
+
+document.getElementById('presetDelete').addEventListener('click', async () => {
+  const name = document.getElementById('presetList').value;
+  if (!name) return;
+  try {
+    const res = await fetch(`/api/presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw apiError(data, res);
+    presetNote(`Deleted "${name}".`);
+    await loadPresets();
+  } catch (err) { presetNote(err.message, 'bad'); }
+});
+
+loadPresets();
+
 // ---- setup check -----------------------------------------------------------------
 
 async function checkSetup() {
@@ -636,6 +721,105 @@ async function checkSetup() {
   } catch (_) { /* the page still works without the check */ }
 }
 checkSetup();
+
+// ---- health check ----------------------------------------------------------------
+//
+// The same checks as the setup card, but always there, plus what this PC can
+// hold and a test of the OpenStreetMap servers, which costs a few seconds.
+
+document.getElementById('healthBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('healthBtn');
+  const out = document.getElementById('healthOut');
+  btn.disabled = true;
+  out.innerHTML = '<p class="hint">Checking…</p>';
+  try {
+    const d = await (await fetch('/api/health?network=1')).json();
+    const row = (ok, label, extra) =>
+      `<li class="${ok ? 'ok' : 'missing'}"><span>${ok ? '✓' : '✗'}</span>
+        <b>${escapeHtml(label)}</b>${extra ? ` — ${escapeHtml(extra)}` : ''}</li>`;
+    const r = d.resources || {};
+    const facts = [];
+    if (r.ramTotalGB != null) {
+      facts.push(`${r.ramFreeGB} of ${r.ramTotalGB} GB memory free`);
+      facts.push(`room to draw about ${r.drawKm2} km² and add buildings to `
+                 + `about ${r.buildKm2} km² at 1 m a tile`);
+    }
+    if (r.cores) facts.push(`${r.cores} processor threads, compiling ${r.compileWorkers} `
+                            + `batch${r.compileWorkers === 1 ? '' : 'es'} at a time`);
+    if (r.diskFreeGB != null) facts.push(`${r.diskFreeGB} GB free where maps are kept`);
+    out.innerHTML = '<ul class="setup-list">'
+      + d.checks.map(c => row(c.ok, c.label, c.ok ? '' : c.fix)).join('')
+      + (d.overpass || []).map(o => row(o.ok, `OpenStreetMap server ${o.host}`,
+          o.ok ? `${o.seconds} s` : 'not answering')).join('')
+      + '</ul>'
+      + (facts.length ? `<ul class="health-facts">${
+          facts.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>` : '')
+      + (d.overpass && d.overpass.every(o => !o.ok)
+          ? '<p class="hint">No OpenStreetMap server answered. Check the internet '
+            + 'connection; a download will not work until one does.</p>' : '');
+  } catch (err) {
+    out.innerHTML = `<p class="hint">Could not check: ${escapeHtml(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---- map data server -----------------------------------------------------------
+
+(async function loadOverpass() {
+  try {
+    const d = await (await fetch('/api/overpass')).json();
+    document.getElementById('overpassList').value = (d.endpoints || []).join('\n');
+  } catch (_) { /* the public servers are used either way */ }
+})();
+
+document.getElementById('overpassSave').addEventListener('click', async () => {
+  const btn = document.getElementById('overpassSave');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/overpass', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoints: document.getElementById('overpassList').value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw apiError(data, res);
+    note('overpassNote', data.endpoints.length
+         ? `Downloads now use ${data.endpoints.length} server${data.endpoints.length === 1 ? '' : 's'} of yours.`
+         : 'Downloads use the public servers.', 'ok');
+  } catch (err) {
+    note('overpassNote', err.message, 'bad');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---- before publishing -----------------------------------------------------------
+
+document.getElementById('publishCheckBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('publishCheckBtn');
+  const out = document.getElementById('publishOut');
+  btn.disabled = true;
+  out.innerHTML = '<p class="hint">Checking…</p>';
+  try {
+    const q = new URLSearchParams({
+      modId: document.getElementById('modId').value.trim(), map: currentMap || '' });
+    const res = await fetch('/api/workshop-check?' + q);
+    const d = await res.json();
+    if (!res.ok) throw apiError(d, res);
+    const mark = { ok: '✓', warn: '!', bad: '✗' };
+    out.innerHTML = '<ul class="setup-list">' + d.results.map(r =>
+      `<li class="${r.level === 'ok' ? 'ok' : 'missing'}"><span>${mark[r.level]}</span>
+        <b>${escapeHtml(r.what)}</b>${r.fix ? ` — ${escapeHtml(r.fix)}` : ''}</li>`).join('')
+      + '</ul>' + `<p class="hint">${d.ready
+        ? (d.warn ? 'Nothing stops you publishing; the warnings above are worth a look.'
+                  : 'Ready to publish.')
+        : `${d.bad} thing${d.bad === 1 ? '' : 's'} to fix before publishing.`}</p>`;
+  } catch (err) {
+    out.innerHTML = `<p class="hint">Could not check: ${escapeHtml(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // ---- Steam libraries -------------------------------------------------------------
 //
@@ -1419,6 +1603,20 @@ document.getElementById('buildingsBtn').addEventListener('click', async () => {
   btn.disabled = true;
   note('buildingsNote', 'Generating…');
   showStop(currentMap);
+  // The request answers only when the whole step is over, so what it is up to
+  // comes from /api/progress meanwhile.
+  const watching = currentMap;
+  let over = false;
+  const watch = setInterval(async () => {
+    try {
+      const p = await (await fetch(
+        `/api/progress?map=${encodeURIComponent(watching)}`)).json();
+      if (!over && p.stage === 'buildings' && p.note) {
+        const pct = p.fraction != null ? ` (${Math.round(100 * p.fraction)}%)` : '';
+        note('buildingsNote', `${p.note}${pct}…`);
+      }
+    } catch (_) { /* the next tick will do */ }
+  }, 1500);
   try {
     const res = await fetch('/api/buildings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1441,6 +1639,8 @@ document.getElementById('buildingsBtn').addEventListener('click', async () => {
   } catch (err) {
     note('buildingsNote', err.message, 'bad');
   } finally {
+    over = true;
+    clearInterval(watch);
     showStop(null);
     btn.disabled = false;
   }
@@ -1513,6 +1713,7 @@ document.getElementById('installBtn').addEventListener('click', async () => {
          + 'in the game\'s Mods menu, then start a NEW save. In a save you are '
          + 'already playing, right-click the ground and pick "Reset loot" for '
          + 'fresh loot in a building.' + lifts, 'ok');
+    document.getElementById('publishCard').hidden = false;
   } catch (err) {
     note('installNote', err.message, 'bad');
     btn.disabled = false;
@@ -1526,9 +1727,30 @@ document.getElementById('installBtn').addEventListener('click', async () => {
 // saved footprints - a fraction of a second - so the zombie settings can be
 // tried without regenerating a single building.
 
+// The picture of the finished layout. The address changes every time so the
+// browser does not show the one from before a rebuild or a recount.
+function refreshLayoutPreview() {
+  const box = document.getElementById('layoutPreview');
+  if (!currentMap) { box.hidden = true; return; }
+  const layer = document.getElementById('layoutLayer').value;
+  const url = `/api/layout-preview?map=${encodeURIComponent(currentMap)}`
+    + `&layer=${layer}&t=${Date.now()}`;
+  const img = document.getElementById('layoutImg');
+  img.onerror = () => { box.hidden = true; };
+  img.onload = () => { box.hidden = false; };
+  img.src = url;
+  document.getElementById('layoutLink').href = url;
+}
+document.getElementById('layoutLayer').addEventListener('change', refreshLayoutPreview);
+
 function renderCensus(pop) {
   const box = document.getElementById('census');
-  if (!pop) { box.hidden = true; return; }
+  if (!pop) {
+    box.hidden = true;
+    document.getElementById('layoutPreview').hidden = true;
+    return;
+  }
+  refreshLayoutPreview();
   box.hidden = false;
   const tiles = document.getElementById('censusTiles');
   tiles.innerHTML = `
@@ -1592,10 +1814,12 @@ async function startCompile(onlyFailed) {
   try {
     const res = await fetch('/api/compile', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mapName: currentMap, onlyFailed: !!onlyFailed }),
+      body: JSON.stringify({ mapName: currentMap, onlyFailed: !!onlyFailed,
+                             fresh: document.getElementById('compileFresh').checked }),
     });
     const data = await res.json();
     if (!res.ok) throw apiError(data, res);
+    document.getElementById('compileFresh').checked = false;   // once, not always
     pollCompile();
   } catch (err) {
     note('compileNote', err.message, 'bad');
@@ -1632,6 +1856,14 @@ function showFailedCells(failed, cells) {
 // the request instead froze the whole window for the length of a town.
 let compileTimer = null;
 
+// "about 12 min", "about 1 h 5 min": rounded, because a pace measured over a few
+// batches is not good to the second.
+function formatLeft(seconds) {
+  const mins = Math.max(1, Math.round(seconds / 60));
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)} h ${mins % 60} min`;
+}
+
 function pollCompile() {
   clearInterval(compileTimer);
   compileTimer = setInterval(async () => {
@@ -1650,9 +1882,18 @@ function pollCompile() {
         // hang. Batches tick over steadily.
         const batch = p.batches ? ` — batch ${p.batch}/${p.batches}` : '';
         fx.progress('compile', p.batches ? Math.max(pct, 100 * (p.batch - 1) / p.batches) : pct);
+        // Time left, once a few batches have set the pace; and the number
+        // running at once when WorldEd made the compile ease off.
+        const left = p.etaSeconds ? ` — about ${formatLeft(p.etaSeconds)} left` : '';
+        const eased = p.workers && p.workersStart && p.workers < p.workersStart
+          ? ` — ${p.workers} at a time, down from ${p.workersStart} after WorldEd errors` : '';
+        // A map compiled before only redoes what has changed since.
+        const inc = p.incremental && p.incremental.batches < p.incremental.of
+          ? ` (only the ${p.incremental.changed} changed cell${p.incremental.changed === 1 ? '' : 's'}`
+            + ` and what touches them: ${p.incremental.batches} of ${p.incremental.of} batches)` : '';
         note('compileNote',
-             `Compiling${batch} — ${p.tmx} cells converted, `
-             + `${p.cells}/${p.expected || '?'} compiled (${pct}%)…`);
+             `Compiling${batch}${inc}${left} — ${p.tmx} cells converted, `
+             + `${p.cells}/${p.expected || '?'} compiled (${pct}%)${eased}…`);
         return;
       }
       clearInterval(compileTimer);

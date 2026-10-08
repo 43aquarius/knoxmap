@@ -74,7 +74,7 @@ def level_of(tags: dict) -> int:
     raw = str(tags.get("layer", "0")).split(";")[0].strip()
     try:
         layer = int(float(raw))
-    except ValueError:
+    except (ValueError, OverflowError):      # OverflowError: "inf", "1e999"
         layer = 0
     bridge = tags.get("bridge") not in (None, "no")
     if bridge:
@@ -511,7 +511,7 @@ def _storeys(tags: dict, default: int, meters_per_level: float = 3.0) -> int:
     try:
         metres = float(str(tags.get("height", "")).split()[0])
         return max(1, min(8, int(round(metres / meters_per_level))))
-    except (ValueError, IndexError):
+    except (ValueError, IndexError, OverflowError):    # "inf" and "1e999" read as numbers
         return default
 
 

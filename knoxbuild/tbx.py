@@ -12,10 +12,19 @@ user_tiles, used_tiles, used_furniture, the <room> list, then <floor>.
 from __future__ import annotations
 
 import random
+import zlib
 from xml.sax.saxutils import escape, quoteattr
 
 from . import catalog as C
 from .layout import ROOM_STYLE, Building, Plan, _erika_ready, roof_rects
+
+
+def _stable_seed(*parts) -> int:
+    """A seed that is the same in every process. hash() of a string is not:
+    Python randomises it per process, so two builds of one map picked
+    different floors and trims, and the build could not be repeated."""
+    return zlib.crc32(repr(parts).encode("utf-8"))
+
 
 # Version 4 is the first that carries a per-room Ceiling tile. Writing 3 still
 # loads - the reader accepts 1..7 - but then it silently back-fills ceilings
@@ -361,13 +370,13 @@ def render_tbx(plan: Plan | Building, name: str,
     # style's.
     # Which room kinds this building trims (see InteriorWallTrim below).
     trim_rng = random.Random(
-        hash((name, building.width, building.height, 'trim')) & 0xFFFFFFFF)
+        _stable_seed(name, building.width, building.height, 'trim'))
     trimmed = {k for k in sorted({r.kind for r in building.rooms})
                if trim_rng.random() < TRIM_SHARE}
     room_floor: dict[str, int] = {}
     pick_rng = random.Random(
-        hash((name, len(building.rooms), building.width,
-              building.height)) & 0xFFFFFFFF)
+        _stable_seed(name, len(building.rooms), building.width,
+                     building.height))
     for kind in sorted({r.kind for r in building.rooms}):
         options = [o for o in of_kind.get(kind, FLOOR_CHOICES.get(kind, ()))
                    if o in C.EXTRA_FLOORS]
@@ -404,7 +413,7 @@ def render_tbx(plan: Plan | Building, name: str,
     room_wall: dict[str, int] = {}
     palette = [interior_idx]
     spare = [e for e in C.INTERIOR_WALLS
-             if not style or e is not style.get("interior")]
+             if not style or e != style.get("interior")]
     pick_rng.shuffle(spare)
     kinds_here = sorted({r.kind for r in building.rooms})
     want = min(WALLS_PER_KIND.get(getattr(storeys[0], "kind", None) or "",

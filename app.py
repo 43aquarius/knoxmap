@@ -14,9 +14,11 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import time
+import urllib.parse
 import zipfile
 from pathlib import Path
 
@@ -113,7 +115,7 @@ def _log_refusals(response):
 @app.route("/api/client-error", methods=["POST"])
 def api_client_error():
     """Errors in the page itself, sent by the script in static/js/app.js."""
-    data = request.get_json(silent=True) or {}
+    data = _json_body()
     eid = knoxlog.error_id()
     log.error("%s page error: %s\n  at %s\n%s", eid,
               str(data.get("message", ""))[:500], str(data.get("where", ""))[:300],
@@ -246,10 +248,7 @@ def api_language(name: str):
     if safe != "english" and not path.is_file():
         return failed(f"No lang/{safe}.txt. Copy lang/english.txt and translate it.", 404)
     if request.method == "POST":
-        config = knoxpaths.load_config()
-        config["language"] = safe
-        with open(knoxpaths.CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+        knoxpaths.update_config({"language": safe})
         log.info("language set to %s", safe)
     return jsonify({"file": safe, "strings": _language_strings(path) if path.is_file() else {}})
 
@@ -264,6 +263,22 @@ def _only_local():
     host = (request.host or "").rsplit(":", 1)[0] if not (request.host or "").startswith("[")         else (request.host or "").split("]")[0] + "]"
     if host not in LOCAL_HOSTS:
         return ("KnoxMap only answers requests from this computer.", 403)
+    # A page open in the browser can send this server a plain POST with no body
+    # (open the logs, restart for an update, change the language): the browser
+    # allows it and the Host above is ours. Browsers say where such a request
+    # came from, so one that came from somewhere else is refused. A request with
+    # no Origin (the test client, curl) is not a browser's and passes.
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin")
+        if origin is not None:
+            try:
+                origin_host = urllib.parse.urlparse(origin).hostname
+            except ValueError:
+                origin_host = None
+            if origin_host not in LOCAL_HOSTS:
+                return ("KnoxMap does not take requests from other websites.", 403)
+        elif request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return ("KnoxMap does not take requests from other websites.", 403)
 
 
 # Where a map stops being an easy one. None of these refuses anything: they
@@ -787,7 +802,9 @@ def generate():
                      f"{USUAL_METERS_PER_TILE[0]:g}-{USUAL_METERS_PER_TILE[1]:g} "
                      f"the window offers")
 
-    raw_name = data.get("mapName") or f"knoxify_{int(time.time())}"
+    raw_name = data.get("mapName")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        raw_name = f"knoxify_{int(time.time())}"
     map_name = SAFE_NAME.sub("_", raw_name).strip("_") or f"knoxify_{int(time.time())}"
 
     # Upper bound on the final bitmap size before we even hit Overpass.
@@ -807,7 +824,15 @@ def generate():
     log.info("generate %s: %.5f,%.5f,%.5f,%.5f at %s m/tile, %.2f km2", map_name,
              south, west, north, east, meters_per_tile, area_km2)
     map_dir = OUTPUT_DIR / map_name
+    # A folder this request makes is taken away again if the download fails: it
+    # holds nothing but the settings, and every failed attempt left one behind.
+    made_here = not map_dir.exists()
     map_dir.mkdir(parents=True, exist_ok=True)
+
+    def forget_empty_folder() -> None:
+        if made_here and not (map_dir / f"{map_name}_info.json").exists():
+            shutil.rmtree(map_dir, ignore_errors=True)
+
     bbox = (south, west, north, east)
     # Remembered next to the map, so Generate buildings and any later rebuild
     # use the same ones without the page having to send them again - and so a
@@ -848,10 +873,12 @@ def generate():
                 *fetch_box, max_tile_km2=OVERPASS_TILE_KM2, progress=_progress,
                 should_stop=_stopper(map_name))
         except knoxstop.Stopped:
+            forget_empty_folder()
             return _stopped(map_name, "generate")
         except Exception as exc:  # Overpass can be flaky — surface that clearly
             message = osm.explain(exc)
             _set_progress(map_name, stage="error", message=message)
+            forget_empty_folder()
             return failed(message, 502, exc)
         try:
             osm.save_cache(cache, fetch_box, features)
@@ -1147,9 +1174,15 @@ def api_buildings():
     out = io.StringIO()
     try:
         from contextlib import redirect_stdout
+        def say(text: str, fraction: float | None) -> None:
+            _set_progress(map_dir.name, stage="buildings", note=text,
+                          fraction=fraction)
+
+        say("Starting", 0.0)
         with redirect_stdout(out):
             build_buildings(str(map_dir), settings=settings,
-                            should_stop=_stopper(map_dir.name))
+                            should_stop=_stopper(map_dir.name), progress=say)
+        _set_progress(map_dir.name, stage="buildings-done", note="", fraction=1.0)
     except knoxstop.Stopped:
         return _stopped(map_dir.name, "buildings")
     except MemoryError as exc:
@@ -1181,6 +1214,25 @@ def _population(map_dir: Path) -> dict | None:
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+@app.route("/api/layout-preview")
+def api_layout_preview():
+    """A picture of what the building step decided - buildings by use, or the
+    zombie heat map - to judge the settings before a long compile."""
+    from knoxbuild import layout_preview
+
+    map_dir = _map_dir(request.args.get("map", ""))
+    if map_dir is None:
+        return jsonify({"error": "Unknown map."}), 404
+    layer = request.args.get("layer", "kinds")
+    if layer not in layout_preview.LAYERS:
+        return jsonify({"error": f"Unknown layer {layer!r}."}), 400
+    if not (map_dir / f"{map_dir.name}_placements.csv").exists():
+        return jsonify({"error": "Build the buildings first - there is nothing "
+                                 "to show until then."}), 400
+    path = layout_preview.render_to(str(map_dir), layer)
+    return send_file(path, mimetype="image/png", max_age=0)
 
 
 @app.route("/api/zombies", methods=["POST"])
@@ -1256,8 +1308,114 @@ def _save_settings(map_dir: Path, settings: Settings) -> None:
         pass          # a map whose settings cannot be saved still builds
 
 
+# ---- saved areas ----------------------------------------------------------------
+#
+# An area with the scale and settings it was made with, kept by name so a town
+# can be come back to without drawing it and setting everything up again. One
+# file next to the program, written whole each time through a temporary file so
+# a crash cannot leave half of it.
+PRESETS_FILE = BASE_DIR / "presets.json"
+_PRESETS_LOCK = threading.Lock()
+MAX_PRESETS = 200
+MAX_PRESET_POINTS = 5000
+
+
+def _read_presets() -> dict:
+    try:
+        with open(PRESETS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_presets(presets: dict) -> None:
+    tmp = PRESETS_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(presets, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, PRESETS_FILE)
+
+
+def _count_points(shape: dict) -> int:
+    def walk(c):
+        if c and isinstance(c[0], (int, float)):
+            return 1
+        return sum(walk(x) for x in c)
+    return walk(shape.get("coordinates") or [])
+
+
+@app.route("/api/presets", methods=["GET", "POST"])
+def api_presets():
+    """GET lists the saved areas; POST saves one under a name, replacing any
+    already called that."""
+    if request.method == "GET":
+        with _PRESETS_LOCK:
+            presets = _read_presets()
+        return jsonify({"presets": sorted(presets.values(),
+                                          key=lambda p: p["name"].lower())})
+    data = _json_body()
+    name = str(data.get("name") or "").strip()[:60]
+    if not name:
+        return jsonify({"error": "Give the area a name."}), 400
+    try:
+        south, west, north, east = (float(data["south"]), float(data["west"]),
+                                    float(data["north"]), float(data["east"]))
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "Draw an area first."}), 400
+    if not (-90 <= south < north <= 90) or not (-180 <= west <= 180
+                                                 and -180 <= east <= 180):
+        return jsonify({"error": "That area is not on the map."}), 400
+    shape = data.get("shape")
+    if shape is not None:
+        if (not isinstance(shape, dict)
+                or shape.get("type") not in ("Polygon", "MultiPolygon")
+                or _count_points(shape) > MAX_PRESET_POINTS):
+            return jsonify({"error": "That outline is not one a saved area can hold."}), 400
+    try:
+        scale = float(data.get("metersPerTile", 1.0))
+    except (TypeError, ValueError):
+        scale = 1.0
+    scale = min(MAX_METERS_PER_TILE, max(MIN_METERS_PER_TILE, scale))
+    from knoxbuild.settings import PRESETS as BUILD_PRESETS
+    given = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+    preset = given.get("preset") if given.get("preset") in BUILD_PRESETS else None
+    entry = {"name": name, "south": south, "west": west, "north": north,
+             "east": east, "shape": shape, "metersPerTile": scale,
+             "preset": preset, "settings": Settings.from_dict(given).to_dict(),
+             "saved": int(time.time())}
+    with _PRESETS_LOCK:
+        presets = _read_presets()
+        if name not in presets and len(presets) >= MAX_PRESETS:
+            return jsonify({"error": f"That is {MAX_PRESETS} saved areas. Delete "
+                                     f"one first."}), 400
+        presets[name] = entry
+        try:
+            _write_presets(presets)
+        except OSError as exc:
+            return failed(f"Could not save the area: {exc}", 500, exc)
+    return jsonify({"saved": entry})
+
+
+@app.route("/api/presets/<path:name>", methods=["DELETE"])
+def api_preset_delete(name: str):
+    with _PRESETS_LOCK:
+        presets = _read_presets()
+        if name not in presets:
+            return jsonify({"error": "No saved area has that name."}), 404
+        del presets[name]
+        try:
+            _write_presets(presets)
+        except OSError as exc:
+            return failed(f"Could not delete the area: {exc}", 500, exc)
+    return jsonify({"deleted": name})
+
+
 @app.route("/api/setup-status")
 def api_setup_status():
+    return jsonify(_setup_report())
+
+
+def _setup_report() -> dict:
     """What is installed, so the page can say exactly what is missing.
 
     Drawing terrain needs nothing but this app. Buildings need nothing more.
@@ -1338,9 +1496,58 @@ def api_setup_status():
                 "fronts and signs, street signs, and far more varied pictures, posters and "
                 "plants. Maps made with it require it."},
     ]
-    return jsonify({"ready": all(c["ok"] for c in checks), "checks": checks,
-                    "optional": optional, "setupCommand": setup,
-                    "mods_dir": str(knoxpaths.zomboid_user_dir() / "mods")})
+    return {"ready": all(c["ok"] for c in checks), "checks": checks,
+            "optional": optional, "setupCommand": setup,
+            "mods_dir": str(knoxpaths.zomboid_user_dir() / "mods")}
+
+
+def _resources() -> dict:
+    """What this PC can hold, in the units the window plans maps in.
+
+    The areas are what fits at 1 m a tile with 80% of the memory that is free
+    right now, using the same per-tile figures the warnings do; the real limit
+    moves with whatever else is open.
+    """
+    import shutil
+
+    from tools.compile_map import default_workers
+
+    out: dict = {"cores": os.cpu_count() or 0, "python64": sys.maxsize > 2 ** 32,
+                 "compileWorkers": default_workers()}
+    status = knoxlog.memory_status()
+    if status:
+        total, free, room = status
+        usable = min(free, room) * 0.8
+        out.update(ramTotalGB=round(total / 1e9, 1), ramFreeGB=round(free / 1e9, 1),
+                   drawKm2=max(0, round((usable - BASE_BYTES) / BYTES_PER_TILE / 1e6)),
+                   buildKm2=max(0, round((usable - BUILD_BASE_BYTES)
+                                         / BUILD_BYTES_PER_TILE / 1e6)))
+    try:
+        out["diskFreeGB"] = round(shutil.disk_usage(OUTPUT_DIR).free / 1e9, 1)
+    except OSError:
+        pass
+    return out
+
+
+@app.route("/api/health")
+def api_health():
+    """The setup checks, what the PC can hold, and (when asked) whether the
+    OpenStreetMap servers are answering. The last is a network round trip, so
+    only `?network=1` makes it."""
+    report = _setup_report()
+    report["resources"] = _resources()
+    if request.args.get("network") == "1":
+        from concurrent import futures
+
+        def one(endpoint: str) -> dict:
+            t0 = time.time()
+            ok = osm._probe(endpoint, 40.0, -74.0)
+            return {"host": endpoint.split("/")[2], "ok": ok,
+                    "seconds": round(time.time() - t0, 1)}
+
+        with futures.ThreadPoolExecutor(max_workers=len(osm.OVERPASS_ENDPOINTS)) as pool:
+            report["overpass"] = list(pool.map(one, osm.OVERPASS_ENDPOINTS))
+    return jsonify(report)
 
 
 @app.route("/api/steam-libraries", methods=["GET", "POST"])
@@ -1517,16 +1724,32 @@ def api_compile():
 
         def note(done: int, total: int, cells: int) -> None:
             with _PROGRESS_LOCK:
-                _COMPILE[name] = {"state": "running", "error": None,
+                now = _COMPILE.get(name, {})
+                # Keep what the detail callback added, and a stop in progress.
+                state = "stopping" if now.get("state") == "stopping" else "running"
+                _COMPILE[name] = {**now, "state": state, "error": None,
                                   "batch": done, "batches": total}
+
+        def detail(info: dict) -> None:
+            with _PROGRESS_LOCK:
+                now = {**_COMPILE.get(name, {"state": "running"}),
+                       "workers": info["workers"],
+                       "workersStart": info["started_with"],
+                       "etaSeconds": info["eta_s"]}
+                # Said once, before the first batch, and kept for the run.
+                if info.get("incremental"):
+                    now["incremental"] = info["incremental"]
+                _COMPILE[name] = now
 
         log.info("compile %s: started", name)
         t0 = time.time()
         try:
             produced = compiler.compile_map(str(map_dir), batch=COMPILE_BATCH,
                                             exe=str(exe), on_progress=note,
+                                            on_detail=detail,
                                             should_stop=_stopper(name),
-                                            only_cells=only)
+                                            only_cells=only,
+                                            fresh=bool(data.get("fresh")))
             if not produced:
                 eid = knoxlog.record(None, f"compile {name}: produced no cells")
                 with _PROGRESS_LOCK:
@@ -1599,6 +1822,62 @@ def api_install():
     log.info("install %s: %d cells as %s, extras %s", map_dir.name, n_cells, mod_id, extras)
     return jsonify({"modRoot": str(mod_root), "cells": n_cells,
                     "extras": extras, "modId": mod_id, "title": title})
+
+
+@app.route("/api/overpass", methods=["GET", "POST"])
+def api_overpass():
+    """Which Overpass servers map data is downloaded from.
+
+    The public ones by default; your own (docs/SELF_HOSTING_OVERPASS.md) when
+    named here. Saved as "overpass_endpoints" in knoxmap_config.json and used
+    at once, so a download started after saving already goes there."""
+    import knoxpaths
+
+    if request.method == "POST":
+        raw = _json_body().get("endpoints")
+        if raw is None or raw == "":
+            raw = []
+        if isinstance(raw, str):
+            raw = re.split(r"[\s,;]+", raw)
+        if not isinstance(raw, list):
+            return jsonify({"error": "Give the servers as a list of addresses."}), 400
+        urls = []
+        for item in raw:
+            url = str(item).strip()
+            if not url:
+                continue
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                return jsonify({"error": f"\"{url}\" is not an http(s) address."}), 400
+            if url not in urls:
+                urls.append(url)
+        if len(urls) > 8:
+            return jsonify({"error": "At most 8 servers."}), 400
+        knoxpaths.update_config({"overpass_endpoints": urls})
+        osm.set_endpoints(urls)
+        log.info("overpass servers: %s", urls or "the public ones")
+    try:
+        configured = knoxpaths.load_config().get("overpass_endpoints")
+    except Exception:  # noqa: BLE001
+        configured = None
+    return jsonify({"endpoints": [str(u) for u in configured] if isinstance(configured, list) else [],
+                    "using": list(osm.OVERPASS_ENDPOINTS),
+                    "public": list(osm._DEFAULT_ENDPOINTS)})
+
+
+@app.route("/api/workshop-check")
+def api_workshop_check():
+    """Is the installed map fit to publish? Reads the mod folder and uploads
+    nothing; see tools/workshop_check.py."""
+    from tools import make_map_mod, workshop_check
+
+    mod_id = SAFE_NAME.sub("_", request.args.get("modId", "")).strip("_")[:60]
+    if not mod_id:
+        return jsonify({"error": "Give the mod id."}), 400
+    map_dir = _map_dir(request.args.get("map", ""))
+    results = workshop_check.check(os.path.join(make_map_mod.default_mods_dir(), mod_id),
+                                   str(map_dir) if map_dir else None)
+    return jsonify({"results": results, **workshop_check.summary(results)})
 
 
 def _bbox_area_km2(south: float, west: float, north: float, east: float) -> float:
