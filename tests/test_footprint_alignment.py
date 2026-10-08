@@ -78,14 +78,20 @@ class BuildingAlignment(unittest.TestCase):
         self.assertFalse(avoid[footprint.y0:footprint.y0 + footprint.height,
                                footprint.x0:footprint.x0 + footprint.width].any())
 
-    def test_building_is_rejected_when_no_road_clearance_is_possible(self):
+    def test_building_still_stands_where_nothing_is_clear_of_the_road(self):
+        # A spot off the road is taken when there is one (the test above), but
+        # where there is none the building stands on the least road it can
+        # rather than being dropped. Dropping it emptied the towns: a footprint
+        # that fronts a pavement cannot reach zero, and in a town most of them
+        # do - the selftest's school, shop and medical building all came out
+        # "0 laid out".
         polygon = [(12, 12), (20, 12), (20, 20), (12, 20)]
         avoid = np.ones((40, 40), dtype=bool)
 
         footprint, reason = place(polygon, np.zeros_like(avoid), avoid=avoid)
 
-        self.assertIsNone(footprint)
-        self.assertEqual(reason, "taken")
+        self.assertEqual(reason, "ok")
+        self.assertIsNotNone(footprint)
 
     def test_legacy_angle_settings_migrate(self):
         self.assertEqual(Settings.from_dict({"square_buildings": 0}).building_alignment,

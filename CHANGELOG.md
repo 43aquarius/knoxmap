@@ -2,6 +2,17 @@
 
 ## 1.6
 
+- **A building that fronts a pavement is built, not thrown away**
+  (`knoxbuild/footprint.py`). Standing a footprint off the road became a hard
+  rule: a spot clear of every road and pavement tile within five, or the
+  building was dropped. Almost nothing in a town can meet that - the road mask
+  carries each road's pavement with it - so whole kinds of building stopped
+  appearing: the selftest's school, shop and medical building each came out
+  "0 laid out", and ten of its checks failed, the lift, the classrooms, the
+  shop units, the cells, the reading rooms and the landmarks among them. A
+  clear spot is still taken wherever there is one; where there is none the
+  building stands on the least road it can.
+
 - **One setting can be changed without making the map again** (`app.py`,
   `static/js/app.js`, `templates/index.html`). Turning the woodland up meant
   drawing the box a second time, naming it again and setting every other knob

@@ -293,12 +293,19 @@ NUDGE_TILES = 5
 
 
 def _clear_of(mask: np.ndarray, x0: int, y0: int, avoid: np.ndarray,
-              occupied: np.ndarray) -> tuple[int, int] | None:
+              occupied: np.ndarray) -> tuple[int, int]:
     """Where to put a footprint so it stands off the roads.
 
-    `avoid` marks road and pavement tiles. A candidate is valid only when the
-    whole footprint clears them; if none is within `NUDGE_TILES`, it is left
-    unplaced rather than built in the roadway."""
+    `avoid` weighs each tile: the bigger the road the more it costs, pavement
+    costs 1 and free ground 0. With roads straightened and buildings squared
+    up, a building can come out a tile or three into the street; it is moved
+    the least distance, up to NUDGE_TILES, that takes it out.
+
+    A spot clear of the road altogether is taken when there is one. Where
+    there is not, the building stands on the least road it can rather than
+    being dropped: demanding a clear spot threw away every footprint that
+    fronts a pavement, which in a town is most of them - the selftest's
+    school, shop and medical building all came out "0 laid out"."""
     map_h, map_w = avoid.shape
     h, w = mask.shape
 
@@ -315,19 +322,21 @@ def _clear_of(mask: np.ndarray, x0: int, y0: int, avoid: np.ndarray,
     here = cost(0, 0)
     if here is None or here[0] == 0:
         return x0, y0
-    best = None
-    best_score = float("inf")
+    clear, clear_score = None, float("inf")
+    best, best_score = (0, 0), here[0] * 4 + here[1]
     for ox in range(-NUDGE_TILES, NUDGE_TILES + 1):
         for oy in range(-NUDGE_TILES, NUDGE_TILES + 1):
             c = cost(ox, oy)
-            if c is None or c[0] > 0:
+            if c is None:
                 continue
-            score = c[1] + (abs(ox) + abs(oy)) * 0.5
+            moved = (abs(ox) + abs(oy)) * 0.5
+            if c[0] == 0 and c[1] + moved < clear_score:
+                clear, clear_score = (ox, oy), c[1] + moved
+            score = c[0] * 4 + c[1] + moved
             if score < best_score:
                 best, best_score = (ox, oy), score
-    if best is None:
-        return None
-    return x0 + best[0], y0 + best[1]
+    ox, oy = clear if clear is not None else best
+    return x0 + ox, y0 + oy
 
 
 def place(px: list[tuple[float, float]], occupied: np.ndarray,
@@ -409,10 +418,7 @@ def place(px: list[tuple[float, float]], occupied: np.ndarray,
 
     before_nudge = (x0, y0)
     if avoid is not None:
-        clear = _clear_of(mask, x0, y0, avoid, occupied)
-        if clear is None:
-            return None, "taken"
-        x0, y0 = clear
+        x0, y0 = _clear_of(mask, x0, y0, avoid, occupied)
     point_offset = (x0 - before_nudge[0], y0 - before_nudge[1])
 
     # Clip to the map, then give up tiles already owned by a neighbour.
