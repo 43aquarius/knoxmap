@@ -339,6 +339,44 @@ def _run_batch(cmd, should_stop, started: float):
 DEFAULT_EXE = knoxpaths.worlded_cli() or Path("PZWorldEd_cli.exe")
 
 
+# WorldEd's BMP to TMX cannot load a landscape bitmap past about 2^28 pixels
+# ("The image file couldn't be loaded"): 16500 x 16500 fails, 13800 x 18600
+# (257 million) compiles. Measured with a plain bitmap of each size, so it is
+# the size that matters, not what is drawn on it.
+WORLDED_MAX_PIXELS = 2 ** 28
+
+
+def bitmap_pixels(width: int, height: int) -> int:
+    """Pixels in the bitmap of a map this many tiles across: the renderer pads each
+    side up to a whole 300-tile cell."""
+    return -(-width // 300) * 300 * (-(-height // 300) * 300)
+
+
+def scale_that_fits(width: int, height: int, meters_per_tile: float) -> int | None:
+    """The smallest whole-metre scale at which a map drawn at this one fits
+    WorldEd, or None if no scale up to 100 does."""
+    for m in range(max(1, int(meters_per_tile) + 1), 101):
+        k = meters_per_tile / m
+        if bitmap_pixels(int(width * k), int(height * k)) <= WORLDED_MAX_PIXELS:
+            return m
+    return None
+
+
+def too_large_note(project: Path) -> str:
+    """Why a compile that failed to load the bitmap may have, if it is too big for
+    WorldEd; empty when it is not."""
+    try:
+        cells_x, cells_y = world_size(Path(project) / f"{Path(project).name}.pzw")
+    except OSError:
+        return ""
+    px = cells_x * 300 * cells_y * 300
+    if px <= WORLDED_MAX_PIXELS:
+        return ""
+    return (f" This map is {cells_x * 300} x {cells_y * 300} tiles ({px / 1e6:.0f} million), "
+            f"and WorldEd cannot load a bitmap past {WORLDED_MAX_PIXELS / 1e6:.0f} million. "
+            f"Make it again with a larger metres-per-tile or a smaller area.")
+
+
 def world_size(pzw: Path) -> tuple[int, int]:
     text = pzw.read_text(encoding="utf-8", errors="replace")
     m = re.search(r'<world version="[^"]*" width="(\d+)" height="(\d+)"', text)
@@ -930,9 +968,11 @@ def compile_map(project_dir: str, batch: int = 4, exe: str | None = None,
                   f"{first['cells'][2]},{first['cells'][3]}")
             if only_cells:
                 raise RuntimeError(f"Those cells still will not compile. {at} "
-                                   f"(exit {first['exit']}): {first['why']}{where}")
+                                   f"(exit {first['exit']}): {first['why']}{where}"
+                                   f"{too_large_note(project)}")
             raise RuntimeError(f"WorldEd failed on every batch. The first was cells "
-                               f"{at} (exit {first['exit']}): {first['why']}{where}")
+                               f"{at} (exit {first['exit']}): {first['why']}{where}"
+                               f"{too_large_note(project)}")
         if failures:
             knoxlog.log.warning("compile %s [%s]: finished with %d of %d batches failed",
                                 project.name, run, len(failures), len(batches))

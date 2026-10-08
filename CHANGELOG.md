@@ -36,6 +36,13 @@
   step comes from the server (`RENDER_SETTINGS`), with a test holding it level
   with what the generate step actually reads.
 
+- **A map too big for WorldEd is refused before it is made** (`app.py`,
+  `tools/compile_map.py`). WorldEd's BMP to TMX cannot load a landscape bitmap past
+  about 268 million pixels (2^28): 16200 x 16500 compiles, 16500 x 16500 fails with
+  "The image file couldn't be loaded", on every batch. A 17700 x 19500 map took
+  most of an hour to make and then failed all 255 batches. Generate now says so
+  at once, with the smallest scale that fits; a compile that fails this way says
+  why. Every other size limit is still only a warning.
 - **Other websites can no longer post to KnoxMap** (`app.py`). A page open in the
   browser could send the server a plain POST with no body (open the logs,
   restart for an update, change the language) and it was run: the Host was

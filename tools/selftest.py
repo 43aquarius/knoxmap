@@ -2334,14 +2334,15 @@ def check_no_size_wall(check, work: str) -> None:
     knoxapp.OUTPUT_DIR = Path(work) / "huge-maps"
     knoxapp.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        # Far past every old limit: about 1,100 km2 at a metre a tile, which
-        # is over a million tiles a side and a quarter of a terabyte of bitmap.
-        huge = {"south": 51.2, "west": -0.6, "north": 51.5, "east": -0.1,
+        # Past every old limit but the one WorldEd has: 25 km x 10 km at a metre a
+        # tile, 25,000 tiles a side and 250 million tiles. (A map past 268
+        # million is refused: see check_worlded_size.)
+        huge = {"south": 51.2, "west": -0.6, "north": 51.29, "east": -0.24,
                 "metersPerTile": 1, "mapName": "selftest-huge"}
         said = client.post("/api/generate", json=huge)
         body = (said.get_json() or {}).get("error", "")
         check("got as far as the download" in body,
-              f"a map far past every old limit is built, not refused "
+              f"a map past every old limit but WorldEd's is built, not refused "
               f"({said.status_code}: {body[:60]})")
 
         for scale, what in ((0, "zero"), (-1, "a negative"), (1e9, "a silly")):
@@ -2966,6 +2967,22 @@ def check_health(check) -> None:
     check(isinstance(data.get("checks"), list) and "compileWorkers" in res
           and res["compileWorkers"] >= 1 and "overpass" not in data,
           "the health check lists the setup and the PC's room, and leaves the network alone by default")
+
+
+def check_worlded_size(check) -> None:
+    """A map WorldEd cannot compile is refused before it is made, and told how to fit."""
+    import app as knoxapp
+    from tools.compile_map import WORLDED_MAX_PIXELS, bitmap_pixels, scale_that_fits
+
+    box = {"south": 34.84560, "west": -120.76103, "north": 35.18564, "east": -120.38612}
+    r = knoxapp.app.test_client().post("/api/generate", json={**box, "metersPerTile": 2})
+    said = (r.get_json() or {}).get("error", "")
+    check(r.status_code == 400 and "WorldEd cannot compile" in said and "At 3 m a tile" in said,
+          f"a 345 million tile map is refused, with the scale that fits ({said[:60]!r})")
+    check(bitmap_pixels(13800, 18600) <= WORLDED_MAX_PIXELS < bitmap_pixels(16500, 16500)
+          and bitmap_pixels(1, 1) == 300 * 300
+          and scale_that_fits(17700, 19500, 2.0) == 3 and scale_that_fits(10 ** 6, 10 ** 6, 100.0) is None,
+          "the size limit sits between a map that compiled and one that did not")
 
 
 def check_other_websites(check) -> None:
@@ -3917,6 +3934,7 @@ def main(argv: list[str]) -> int:
         check_odd_requests(check, work)
         check_saved_areas(check, work)
         check_health(check)
+        check_worlded_size(check)
         check_other_websites(check)
         check_overpass_setting(check, work)
         check_workshop(check, work)
