@@ -463,16 +463,158 @@ function readSettings() {
   return out;
 }
 
+// ---- putting a changed setting into a map that already exists ---------------
+// Changing the woodland used to mean drawing the box again, naming it again and
+// setting every other knob again, because nothing remembered what a map was
+// made from. All of it is saved beside the map; this hands it back. Only the
+// steps a change really needs are run - most knobs are read when the buildings
+// are laid out, and those go onto the ground that is already drawn - and the
+// Overpass download is kept next to the map, so even a redraw does not fetch
+// the town again (generator/osm.py, save_cache).
+let openedMap = null;
+
+function rememberMap(map) {
+  openedMap = map;
+  if (map && map.settings) {
+    openedMap.settings = { ...map.settings };
+    delete openedMap.settings.preset;
+  }
+  // What the panel reads back once it has been filled in, which is not always
+  // what was saved: the sliders step in hundredths, so a style_oddity of 0.18
+  // comes back as 0.20 and would be reported as a change nobody made. The
+  // knobs are measured against what they were showing, and only the ones that
+  // really move are sent, so the rest keep the value the map was made with.
+  openedMap.shown = readSettings();
+  showReapply();
+}
+
+// The knobs moved since the panel was filled in, by name.
+function changedSettings() {
+  if (!openedMap || !openedMap.shown) return [];
+  const now = readSettings();
+  const was = openedMap.shown;
+  const out = [];
+  for (const [key, value] of Object.entries(now)) {
+    if (key === 'preset' || !(key in was)) continue;
+    const before = was[key];
+    const same = typeof value === 'number' && typeof before === 'number'
+      ? Math.abs(value - before) < 1e-9
+      : String(value) === String(before);
+    if (!same) out.push(key);
+  }
+  return out;
+}
+
+// The map's own settings with the moved knobs put in: a setting the panel
+// cannot show exactly is left exactly as it was.
+function settingsToApply(changed) {
+  const now = readSettings();
+  const out = { ...(openedMap.settings || {}) };
+  for (const key of changed) out[key] = now[key];
+  return out;
+}
+
+// renderKeys comes from /api/settings so the page is not a second, drifting
+// copy of which knob belongs to which step.
+function stepsFor(changed) {
+  if (!changed.length) return [];
+  const redraw = (settingsMeta && settingsMeta.renderKeys) || [];
+  return changed.some(k => redraw.includes(k)) ? ['generate', 'build'] : ['build'];
+}
+
+function showReapply() {
+  const box = document.getElementById('reapply');
+  if (!box) return;
+  if (!openedMap) { box.hidden = true; box.innerHTML = ''; return; }
+  const changed = changedSettings();
+  const steps = stepsFor(changed);
+  box.hidden = false;
+  if (!steps.length) {
+    box.innerHTML = `<span class="hint">${escapeHtml(openedMap.mapName)} already has these settings.</span>`;
+    return;
+  }
+  const names = changed.map(k => (SETTING_LABELS[k] || [k])[0]);
+  const what = steps.length === 2
+    ? 'draws the map again and lays the buildings out again'
+    : 'lays the buildings out again, on the ground already drawn';
+  box.innerHTML = `<span class="hint">Changed since ${escapeHtml(openedMap.mapName)} was made:
+      ${escapeHtml(names.join(', '))}. Applying it ${what} - the area, the scale and the name stay as they are.</span>
+    <button type="button" id="reapplyBtn" class="btn">Apply to ${escapeHtml(openedMap.mapName)}</button>`;
+  document.getElementById('reapplyBtn').addEventListener('click', reapply);
+}
+
+async function reapply() {
+  const box = document.getElementById('reapply');
+  const btn = document.getElementById('reapplyBtn');
+  const changed = changedSettings();
+  const steps = stepsFor(changed);
+  if (!steps.length || !openedMap) return;
+  const settings = settingsToApply(changed);
+  const say = text => {
+    const line = box.querySelector('.hint');
+    if (line) line.textContent = text;
+  };
+  const post = async (url, body) => {
+    const res = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const out = await res.json();
+    if (wasStopped(out, res)) return null;
+    if (!res.ok) throw apiError(out, res);
+    return out;
+  };
+  btn.disabled = true;
+  showStop(openedMap.mapName);
+  try {
+    if (steps.includes('generate')) {
+      say(`Drawing ${openedMap.mapName} again - the town is not downloaded twice.`);
+      startProgress(openedMap.mapName);
+      const b = openedMap.bbox || {};
+      const drawn = await post('/api/generate', {
+        south: b.south, west: b.west, north: b.north, east: b.east,
+        metersPerTile: openedMap.metersPerTile, mapName: openedMap.mapName,
+        settings, shape: openedMap.shape,
+      });
+      if (!drawn) { say('Stopped. Nothing was thrown away.'); return; }
+      renderResults(drawn);
+    }
+    say('Laying the buildings out again...');
+    const built = await post('/api/buildings',
+                             { mapName: openedMap.mapName, settings });
+    if (!built) { say('Stopped. Nothing was thrown away.'); return; }
+    renderCensus(built.population);
+    document.getElementById('worldedBtn').disabled = false;
+    document.getElementById('compileBtn').disabled = false;
+    note('compileNote', 'Ready - compile to put the change in the game.');
+    rememberMap({ ...openedMap, settings });
+    fx.toast('ok', 'Settings applied',
+             `${openedMap.mapName}: ${built.count} buildings. Compile it to put the change in the game.`);
+  } catch (err) {
+    say(err.message);
+  } finally {
+    btn.disabled = false;
+    showStop(null);
+  }
+}
+
+// The box is rebuilt by buildSettingsForm, so the listener goes on the
+// container, which is not.
+document.getElementById('advanced-body').addEventListener('input', showReapply);
+document.getElementById('advanced-body').addEventListener('change', showReapply);
+
 document.getElementById('preset').addEventListener('change', () => {
   if (!settingsMeta) return;
   const preset = settingsMeta.presets[document.getElementById('preset').value];
   if (preset) buildSettingsForm(preset);
+  showReapply();
 });
 
 document.getElementById('resetSettings').addEventListener('click', () => {
   if (!settingsMeta) return;
   const preset = settingsMeta.presets[document.getElementById('preset').value];
   buildSettingsForm(preset || settingsMeta.defaults);
+  showReapply();
 });
 
 // ---- setup check -----------------------------------------------------------------
@@ -599,6 +741,12 @@ async function openMap(mapName) {
   }
   renderResults(data);
   showUpgrade(data);
+  // The settings this map was made with, back in the panel, so one of them can
+  // be changed and put into it without setting all the others again.
+  if (data.settings && settingsMeta) buildSettingsForm(data.settings);
+  rememberMap({ mapName: data.mapName, bbox: data.bbox,
+                metersPerTile: data.metersPerTile, shape: data.shape,
+                settings: data.settings });
 }
 
 function showUpgrade(data) {
@@ -812,6 +960,12 @@ document.getElementById('generateBtn').addEventListener('click', async () => {
     fx.toast('ok', 'Terrain generated',
              `${data.cellsX} × ${data.cellsY} cells from ${data.featureCount.toLocaleString()} features.`);
     renderResults(data);
+    // What it was just made from, so a knob can be moved and put into it
+    // without drawing the box again.
+    rememberMap({ mapName: chosen,
+                  bbox: { south: bb.s, west: bb.w, north: bb.n, east: bb.e },
+                  metersPerTile: body.metersPerTile, shape: body.shape,
+                  settings: data.settings || body.settings });
     loadMaps();
   } catch (err) {
     status.className = 'error';

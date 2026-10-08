@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- **One setting can be changed without making the map again** (`app.py`,
+  `static/js/app.js`, `templates/index.html`). Turning the woodland up meant
+  drawing the box a second time, naming it again and setting every other knob
+  again, because nothing handed back what a map was made from - and all of it
+  is saved beside the map already. Opening one now puts its own settings back
+  in the panel, and moving any of them offers to put the change into that map
+  over its own area, scale and name.
+
+  Only the steps a change really needs are run. Five knobs are read while the
+  ground is drawn - straighten streets, turn the map, straight roads, woodland
+  and fill gaps - and those mean drawing it again; every other one is read
+  while the buildings are laid out, so they go onto the ground that is already
+  there. Changing the tallest building on a 900x900 map took 5 seconds instead
+  of a download and a render. Even a redraw does not fetch the town twice: the
+  Overpass reply is kept beside the map and reused, as long as the filters have
+  not changed since.
+
+  A setting the panel cannot show exactly is left exactly as it was - the
+  sliders step in twentieths, so a style_oddity of 0.18 reads back as 0.20 -
+  and only the knobs that really moved are sent. Which knob belongs to which
+  step comes from the server (`RENDER_SETTINGS`), with a test holding it level
+  with what the generate step actually reads.
+
 ## 1.5.2
 
 - **Big maps no longer fail Generate buildings with "exceeds limit of 178956970

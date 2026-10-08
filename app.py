@@ -694,6 +694,16 @@ BASE_BYTES = 150e6
 BUILD_BYTES_PER_TILE = 24
 BUILD_BASE_BYTES = 300e6
 
+# The settings the ground itself is drawn from. Change one of these and the
+# map has to be rendered again; every other knob is read while the buildings
+# are generated, and those can be laid out afresh on the ground already there.
+# Changing the woodland used to mean drawing the box and setting every knob a
+# second time, so the page asks for this (/api/settings) and runs only the
+# steps a change really needs. tests/test_render_settings.py checks it against
+# what generate() actually reads, so the two cannot drift apart.
+RENDER_SETTINGS = ["align_streets", "rotate_degrees", "straight_roads",
+                   "tree_density", "fill_gaps"]
+
 
 def _too_big_for_memory(tiles_w: float, tiles_h: float,
                         per_tile: float = BYTES_PER_TILE,
@@ -941,6 +951,9 @@ def generate():
         # What the window warned about and the mapper went ahead with anyway,
         # so it can say so beside the finished map too.
         "heavy": heavy,
+        # As they were taken, clamped and saved - not as the page sent them -
+        # so it can tell afterwards which knobs have really been moved since.
+        "settings": settings.to_dict(),
         "fromOverture": gaps.get("added", 0),
         "overtureError": gaps.get("error") or gaps.get("why") or "",
         "files": {
@@ -1388,6 +1401,9 @@ def api_settings():
     return jsonify({
         "current": current.to_dict(),
         "defaults": Settings().to_dict(),
+        # Which of them need the map drawing again, rather than only the
+        # buildings laying out again.
+        "renderKeys": RENDER_SETTINGS,
         # JSON writes 1.0 as 1, so the page cannot tell a float whose default
         # happens to be whole from an int - and a woodland slider built as an
         # integer can only reach 0, 1, 2 or 3. Say which is which.
