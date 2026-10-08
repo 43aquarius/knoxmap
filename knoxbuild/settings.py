@@ -100,6 +100,13 @@ class Settings:
     # often one building breaks from its block anyway.
     neighbourhood_tiles: int = 110
     style_oddity: float = 0.18
+    # What the housing is built like. "auto" reads the map's own building
+    # names: a town written in Chinese gets flat-roofed masonry blocks and
+    # taller self-built houses, the way it is really built there (see
+    # knoxbuild/regional.py). "cn" forces that regardless of what the names
+    # say, and "off" builds every town the way the game's own Knox County is
+    # built, which is what every map did before this knob existed.
+    arch_style: str = "auto"
 
     # --- zones -----------------------------------------------------------
     # Scales how many ParkingStall zones are found. Vehicles only ever spawn
@@ -120,12 +127,14 @@ class Settings:
 
         kept: dict = {}
         types = {f.name: f.type for f in fields(cls)}
+        enum_options = {"building_alignment": BUILDING_ALIGNMENT_OPTIONS,
+                        "arch_style": ARCH_STYLE_OPTIONS}
         for name, raw in list(base.items()) + list(data.items()):
             if name not in types:
                 continue          # unknown key, including "preset" itself
-            if name == "building_alignment":
+            if name in enum_options:
                 value = str(raw).strip().lower()
-                if value in BUILDING_ALIGNMENT_OPTIONS:
+                if value in enum_options[name]:
                     kept[name] = value
                 continue
             try:
@@ -184,9 +193,13 @@ LIMITS = {
     "neighbourhood_tiles": (20, 2000),
     "style_oddity": (0.0, 1.0),
     "parking_density": (0.0, 4.0),
+    # Not a range at all - the page asks /api/settings for the options -
+    # but every knob gets an entry so the settings form can be built blind.
+    "arch_style": (0, 3),
 }
 
 BUILDING_ALIGNMENT_OPTIONS = ("real", "smart", "rectilinear", "rectangle")
+ARCH_STYLE_OPTIONS = ("auto", "cn", "off")
 
 
 PRESETS = {

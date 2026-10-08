@@ -1599,7 +1599,7 @@ def _overture_ready() -> bool:
 def api_settings():
     """The knobs, their limits, and the presets - so the page is not a
     hard-coded copy of them that drifts out of step."""
-    from knoxbuild.settings import LIMITS
+    from knoxbuild.settings import LIMITS, BUILDING_ALIGNMENT_OPTIONS
 
     map_dir = _map_dir(request.args.get("map", ""))
     current = _load_settings(map_dir) if map_dir else Settings()
@@ -1614,12 +1614,15 @@ def api_settings():
         # JSON writes 1.0 as 1, so the page cannot tell a float whose default
         # happens to be whole from an int - and a woodland slider built as an
         # integer can only reach 0, 1, 2 or 3. Say which is which.
-        "types": {f.name: ("enum" if f.name == "building_alignment" else
-                           "int" if f.type in (int, "int") else "float")
+        "types": {f.name: ("enum" if f.name in ("building_alignment", "arch_style")
+                           else "int" if f.type in (int, "int") else "float")
                   for f in fields(Settings)},
-        "options": {"building_alignment": [
-            ["real", "Real"], ["smart", "Smart"],
-            ["rectilinear", "Rectilinear"], ["rectangle", "Rectangle"]]},
+        "options": {
+            "building_alignment": [
+                [value, value.capitalize()]
+                for value in BUILDING_ALIGNMENT_OPTIONS],
+            "arch_style": [["auto", "Auto"], ["cn", "Chinese"], ["off", "Default"]],
+        },
         "limits": {k: list(v) for k, v in LIMITS.items()},
         "presets": {name: s.to_dict() for name, s in PRESETS.items()},
     })

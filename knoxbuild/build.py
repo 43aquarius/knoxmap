@@ -95,6 +95,7 @@ def is_notable(tags: dict, kind: str | None) -> bool:
     return (tags.get("amenity") in NOTABLE_AMENITY
             or tags.get("tourism") in ("museum", "attraction")
             or tags.get("historic") not in (None, "", "no")
+            or tags.get("heritage") not in (None, "", "no")
             or tags.get("building") in ("government", "public", "civic", "townhall")
             or "wikidata" in tags or "wikipedia" in tags)
 
@@ -174,10 +175,9 @@ SPECIAL_BY_NAME = [
     ("residence", "apartment"), ("towers", "apartment"), ("blok", "apartment"),
 ]
 
-# Storeys, when OSM does not say. A town of nothing but bungalows reads as a
-# film set - the skyline is what tells you whether you are downtown or in the
-# suburbs, and every building here was one floor tall.
-HOUSE_TWO_STOREY_CHANCE = 0.3
+# Storeys, when OSM does not say and the area tables in regional.py do not
+# cover the kind either. A town of nothing but bungalows reads as a film set
+# - the skyline is what tells you whether you are downtown or in the suburbs.
 DEFAULT_LEVELS = {
     "industrial": (1, 1),
     "barn": (1, 1),
@@ -432,16 +432,31 @@ def levels_from_tags(tags: dict, settings: Settings) -> int | None:
 
 
 def building_levels(tags: dict, kind: str | None, area_tiles: int,
-                    rng, settings: Settings) -> tuple[int, bool]:
-    """How many storeys this building gets, and whether OSM said so."""
+                    rng, settings: Settings,
+                    metres_per_tile: float = 1.0,
+                    region: str | None = None) -> tuple[int, bool]:
+    """How many storeys this building gets, and whether OSM said so.
+
+    OSM's own height and level tags come first, as ever. Where it says
+    nothing, the guess is the Arnis way: the kind and the real footprint
+    together (knoxbuild/regional.py) - a 90 m2 footprint is a shop unit or
+    somebody's house whatever country it is in, and a 2,500 m2 one is not a
+    bungalow - with the region's own housing tables where the map is of
+    somewhere whose housing does not run to Knox County's shapes.
+    """
+    from .regional import area_level_pool
+
     measured = levels_from_tags(tags, settings)
     if measured is not None:
         return measured, True
-    if kind is None:
-        # Most houses are a single storey under a pitched roof; an even split
-        # of one and two storeys made a suburb a street of tall boxes.
-        return (2 if rng.random() < HOUSE_TWO_STOREY_CHANCE else 1), False
     lo, hi = DEFAULT_LEVELS.get(kind or "", (1, 2))
+    if region == "cn":
+        from .regional import CN_DEFAULT_LEVELS
+        lo, hi = CN_DEFAULT_LEVELS.get(kind or "", (lo, hi))
+    real_m2 = area_tiles * metres_per_tile * metres_per_tile
+    pool = area_level_pool(kind, real_m2, region)
+    if pool:
+        return max(1, min(settings.max_levels, rng.choice(pool))), False
     return rng.randint(min(lo, settings.max_levels),
                        min(hi, settings.max_levels)), False
 
@@ -543,13 +558,19 @@ def wall_variants(kind: str) -> list[dict]:
 
 def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
                settings: Settings, density: float = 0.0,
-               profile: BuildingProfile | None = None) -> dict:
+               profile: BuildingProfile | None = None,
+               region: str | None = None) -> dict:
     """Materials for one building: its own if special, else its block's.
 
     Only styles that suit how built-up the place is are in the running, so the
     old town gets render and brick and the log cabins stay in the countryside.
+    A Chinese map (or one set to Chinese) builds its houses from the flat-roofed
+    masonry pool instead - unless the building is a dated prewar one, which
+    keeps its pitched roof and era materials: the temple and the 1920s shophouse
+    are the last things a regional pool should flatten.
     """
     from . import catalog as C
+    from . import regional
 
     kind = BORROWED_STYLE.get(kind or "", kind)
     if kind and kind in C.SPECIAL_STYLES:
@@ -562,8 +583,13 @@ def pick_style(kind: str | None, tile_x: int, tile_y: int, rng,
         # picks the same again.
         return variants[(tile_x * 73856093 ^ tile_y * 19349663) % len(variants)]
 
-    styles = [s for s in C.HOUSE_STYLES if style_fits(s["name"], density)] \
-        or C.HOUSE_STYLES
+    if region == "cn" and not (profile and profile.dated
+                               and profile.era == "prewar"):
+        pool = regional.cn_house_styles()
+        styles = [s for s in pool if style_fits(s["name"], density)] or pool
+    else:
+        styles = [s for s in C.HOUSE_STYLES if style_fits(s["name"], density)] \
+            or C.HOUSE_STYLES
     size = settings.neighbourhood_tiles
     block = (tile_x // size, tile_y // size)
     # Deterministic per block, so re-running gives the same town.
@@ -1174,6 +1200,17 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         return 2
     road_hierarchy = _load_road_hierarchy(out_dir, map_name, proj)
 
+    # What part of the world the survey is of, read from the names on its own
+    # buildings (knoxbuild/regional.py). Only Chinese housing is built its own
+    # way for now; anywhere else keeps the game's shapes, and `arch_style`
+    # forces the question either way.
+    from . import regional
+    region = None
+    if settings.arch_style == "cn":
+        region = "cn"
+    elif settings.arch_style != "off":
+        region = regional.detect_region(geo, bbox)
+
     # Where this map stands in the world, beside any other KnoxMap map on
     # this PC rather than on top of it (knoxbuild/world.py). Everything
     # below - the paper map, the zones, the compiled cells - is written from
@@ -1427,13 +1464,18 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
             special = "apartment"
             commercial = True
         levels, measured = building_levels(tags, special, fp.tiles,
-                                           style_rng, settings)
+                                           style_rng, settings,
+                                           metres_per_tile=metres_per_tile,
+                                           region=region)
         if measured:
             from_osm += 1
         elif nearby is not None and (special or "house") in FOLLOWS_NEIGHBOURS:
             top = settings.max_levels
             if special is None:
-                top = min(top, HOUSE_MAX_LEVELS)
+                # A Chinese self-built house runs a storey taller than the
+                # game's houses before the neighbours' heights are heard.
+                top = min(top, HOUSE_MAX_LEVELS + 1 if region == "cn"
+                          else HOUSE_MAX_LEVELS)
             levels = max(1, min(top, int(round(nearby)) +
                                 style_rng.choice((-1, 0, 0, 1))))
             from_near += 1
@@ -1459,7 +1501,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # and the public buildings that have no walls of their own as civic.
         style = pick_style(STYLE_AS.get("civic" if hotel else special, special),
                            x0, y0, style_rng, settings,
-                           density=local_density, profile=profile)
+                           density=local_density, profile=profile,
+                           region=region)
         if profile.wear < 0.18 and style.get("grime"):
             style = dict(style)
             style.pop("grime", None)
@@ -1705,6 +1748,10 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     total_furn = sum(r["furniture"] for r in rows)
     print(f"footprints in geojson : {len(geo['features'])}")
     print(f"  shops, food, offices: {with_uses} buildings from the map's points and tags")
+    if region:
+        print(f"  region style         : {region}"
+              + (" (flat roofs, masonry blocks, taller housing)" if region == "cn"
+                 else " (built the default way for now)"))
     print(f"  too small (<{min_size})     : {skipped['small']}")
     if split_large:
         print(f"  oversized (>{max_size})     : {split_large} kept, "

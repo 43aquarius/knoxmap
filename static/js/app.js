@@ -405,6 +405,7 @@ const SETTING_LABELS = {
   max_levels:          ['Tallest building', 'Storeys, up to 30 - as tall as the base game gets. OSM heights are capped to this. Tall cities take longer to compile.'],
   room_size:           ['Room size', 'Target room area in tiles before it gets split.'],
   building_alignment:  ['Building alignment', 'Real preserves the mapped outline. Smart squares near-grid buildings. Rectilinear aligns the dominant wall direction while keeping the footprint shape. Rectangle uses a clean box.'],
+  arch_style:         ['Architecture', 'Auto reads the map\u2019s own building names: a town written in Chinese gets flat-roofed masonry blocks, taller self-built houses and walk-up flats, the way it is really built there. Chinese forces that look. Default builds every town like the game\u2019s own Kentucky.'],
   neighbourhood_tiles: ['Neighbourhood', 'How far one set of materials reaches.'],
   style_oddity:        ['Odd one out', 'How often a building breaks from its block.'],
   parking_density:     ['Parking', 'Vehicles only ever spawn in a parking stall.'],
